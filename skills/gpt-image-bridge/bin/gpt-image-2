@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Generate an image via OpenAI's gpt-image-2 through the codex CLI.
+# Uses the logged-in ChatGPT subscription — no API key required.
+#
+# Usage: gpt-image-2 "<prompt>" <output.png> [--size WxH]
+#
+# If --size is omitted, the model picks its own dimensions.
+
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: gpt-image-2 \"<prompt>\" <output.png> [--size WxH]" >&2
+  exit 2
+fi
+
+prompt="$1"
+out="$2"
+shift 2
+
+size=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --size) size="$2"; shift 2 ;;
+    *) echo "gpt-image-2: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "gpt-image-2: codex CLI not found on PATH. Install it (e.g. 'brew install codex') and run 'codex login'." >&2
+  exit 127
+fi
+
+out_dir="$(cd "$(dirname "$out")" 2>/dev/null && pwd)" || {
+  echo "gpt-image-2: output dir does not exist: $(dirname "$out")" >&2
+  exit 2
+}
+out="$out_dir/$(basename "$out")"
+
+rm -f "$out"
+
+size_line=""
+if [[ -n "$size" ]]; then
+  size_line="
+SIZE: ${size}"
+fi
+
+full_prompt="Use your image_generation tool (gpt-image-2) to create an image.
+
+PROMPT: ${prompt}${size_line}
+
+Requirements:
+- You MUST call the image_generation tool.
+- Do NOT write a Python script, shell out to curl, or fabricate a PNG any other way.
+- After the tool produces the image, copy the generated PNG to this exact path: ${out}
+- Reply with only the absolute path of the saved PNG, nothing else."
+
+log="$(mktemp "${TMPDIR:-/tmp}/gpt-image-2.XXXXXX")"
+
+if ! codex exec --skip-git-repo-check -s workspace-write "$full_prompt" </dev/null >"$log" 2>&1; then
+  echo "gpt-image-2: codex exec failed. Last 30 lines of log:" >&2
+  tail -n 30 "$log" >&2
+  echo "(full log: $log)" >&2
+  exit 1
+fi
+
+if [[ ! -f "$out" ]]; then
+  echo "gpt-image-2: codex finished but $out was not created. Last 30 lines of log:" >&2
+  tail -n 30 "$log" >&2
+  echo "(full log: $log)" >&2
+  exit 1
+fi
+
+rm -f "$log"
+echo "$out"
