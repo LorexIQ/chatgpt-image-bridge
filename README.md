@@ -31,6 +31,8 @@ codex features list | grep image_generation    # should be: stable true
 
 ## Install
 
+### Manual
+
 ```bash
 git clone https://github.com/oakplank/claude-gpt-image-bridge.git
 cd claude-gpt-image-bridge
@@ -38,6 +40,28 @@ cd claude-gpt-image-bridge
 ```
 
 The installer copies the skill into `~/.claude/skills/gpt-image-bridge/` and makes the wrapper executable. Claude Code picks up skills in that directory automatically — no further config needed.
+
+### Agent install (paste this to your agent)
+
+Drop the block below into your Claude Code session (or any shell-capable AI agent) and it will install the skill for you, verify prereqs, and offer a smoke test.
+
+```
+Please install the claude-gpt-image-bridge skill from https://github.com/oakplank/claude-gpt-image-bridge so I can generate images with gpt-image-2 through my ChatGPT subscription.
+
+1. Check that the `codex` CLI is installed and logged in:
+     codex login status
+   It should say "Logged in using ChatGPT". If codex is missing or not logged in, stop and tell me to run `brew install codex && codex login` first.
+
+2. Clone and install:
+     git clone https://github.com/oakplank/claude-gpt-image-bridge.git /tmp/claude-gpt-image-bridge
+     cd /tmp/claude-gpt-image-bridge && ./install.sh
+
+3. Verify ~/.claude/skills/gpt-image-bridge/bin/gpt-image-2 exists and is executable.
+
+4. Once installed, offer to smoke-test by generating a small image to /tmp/test.png and opening it so I can confirm it works end-to-end. Use a generous Bash timeout (at least 240000 ms) since codex reasons before the image tool fires.
+
+Report back when each step is done, and stop if any step fails.
+```
 
 ## Usage
 
