@@ -10,17 +10,19 @@ Claude Code doesn't ship with an image generation tool. This skill adds a thin b
 
 ```
 Claude Code ──Bash──▶ gpt-image-2 wrapper ──codex exec──▶ gpt-image-2 (OpenAI)
-                                                                 │
-             Read PNG ◀───────────── /tmp/out.png ◀──────── copied from
-                                                     ~/.codex/generated_images/
+                              │                                  │
+             Read PNG ◀── copies to your ◀──── out.png in a ◀────┘
+                          output path          private temp dir
 ```
+
+Codex runs sandboxed and can only write inside its own working directory, so the wrapper points it at a private temp dir and performs the final copy itself. That keeps arbitrary output paths (and Windows paths) working reliably.
 
 ## Prerequisites
 
 - [Claude Code](https://docs.claude.com/en/docs/claude-code)
-- [`codex` CLI](https://github.com/openai/codex) installed (`brew install codex` on macOS)
+- [`codex` CLI](https://github.com/openai/codex) installed (`brew install codex` on macOS, `npm install -g @openai/codex` anywhere)
 - A ChatGPT subscription (Plus / Pro / Team) logged in via `codex login`
-- macOS or Linux (wrapper is bash; Windows users can run it under WSL)
+- macOS, Linux, or Windows — the wrapper is bash, which on Windows runs under Git Bash (the shell Claude Code already uses there) or WSL
 
 Verify:
 
@@ -58,7 +60,7 @@ Please install the claude-gpt-image-bridge skill from https://github.com/oakplan
 
 3. Verify ~/.claude/skills/gpt-image-bridge/bin/gpt-image-2 exists and is executable.
 
-4. Once installed, offer to smoke-test by generating a small image to /tmp/test.png and opening it so I can confirm it works end-to-end. Use a generous Bash timeout (at least 240000 ms) since codex reasons before the image tool fires.
+4. Once installed, offer to smoke-test by generating a small image to /tmp/test.png and opening it so I can confirm it works end-to-end. Use the maximum Bash timeout (600000 ms) — codex reasons before the image tool fires and calls routinely take 4-6 minutes.
 
 Report back when each step is done, and stop if any step fails.
 ```
@@ -105,10 +107,10 @@ npx skills add https://github.com/Leonxlnx/taste-skill --skill image-taste-front
 
 ## Caveats
 
-- **Latency**: calls go through codex's reasoning loop before the image tool fires. Latency depends on your codex `reasoning_effort` config.
+- **Latency**: calls go through codex's reasoning loop before the image tool fires — expect 4–6 minutes per image. Latency depends on your codex `reasoning_effort` config.
 - **Quota**: ChatGPT subscriptions have message limits. Heavy automated use can hit rate caps.
 - **Terms of service**: using `codex` programmatically to drive image generation is within the spirit of the tool (codex is an official OpenAI product), but consumer-subscription automation is ultimately gated by OpenAI's terms. Use at your own risk.
-- **macOS / Linux only** for now — the wrapper is bash.
+- **Bash required** — native on macOS/Linux; on Windows use Git Bash (bundled with Git for Windows, and what Claude Code uses there) or WSL.
 
 ## License
 

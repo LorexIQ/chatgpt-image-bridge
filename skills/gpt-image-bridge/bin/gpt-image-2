@@ -5,6 +5,7 @@
 # Usage: gpt-image-2 "<prompt>" <output.png> [--size WxH]
 #
 # If --size is omitted, the model picks its own dimensions.
+# Works on macOS, Linux, and Windows (Git Bash or WSL).
 
 set -euo pipefail
 
@@ -26,7 +27,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ! command -v codex >/dev/null 2>&1; then
-  echo "gpt-image-2: codex CLI not found on PATH. Install it (e.g. 'brew install codex') and run 'codex login'." >&2
+  echo "gpt-image-2: codex CLI not found on PATH. Install it ('brew install codex' or 'npm install -g @openai/codex') and run 'codex login'." >&2
   exit 127
 fi
 
@@ -36,12 +37,27 @@ out_dir="$(cd "$(dirname "$out")" 2>/dev/null && pwd)" || {
 }
 out="$out_dir/$(basename "$out")"
 
-rm -f "$out"
-
 size_line=""
 if [[ -n "$size" ]]; then
   size_line="
 SIZE: ${size}"
+fi
+
+# Codex runs under a workspace-write sandbox: it can only write inside its own
+# working directory, so it must not be handed the final output path (which may
+# be outside the workspace, or in a path format its shell doesn't parse).
+# Instead it saves the image into a private temp workdir and the wrapper does
+# the final copy, which no sandbox restricts.
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/gpt-image-2.XXXXXX")"
+# The log lives beside the workdir, not inside it: background scanners can pin
+# an open log file on Windows, and that must not block removing the workdir.
+log="${workdir}.log"
+
+# On Windows (Git Bash), codex is a native binary that can't resolve POSIX
+# paths like /tmp/... — hand it a C:/-style path instead.
+codex_workdir="$workdir"
+if command -v cygpath >/dev/null 2>&1; then
+  codex_workdir="$(cygpath -m "$workdir")"
 fi
 
 full_prompt="Use your image_generation tool (gpt-image-2) to create an image.
@@ -51,24 +67,31 @@ PROMPT: ${prompt}${size_line}
 Requirements:
 - You MUST call the image_generation tool.
 - Do NOT write a Python script, shell out to curl, or fabricate a PNG any other way.
-- After the tool produces the image, copy the generated PNG to this exact path: ${out}
-- Reply with only the absolute path of the saved PNG, nothing else."
+- After the tool produces the image, save the PNG as out.png in your current working directory. Use the relative path out.png, not an absolute path.
+- Reply with only the file name of the saved PNG, nothing else."
 
-log="$(mktemp "${TMPDIR:-/tmp}/gpt-image-2.XXXXXX")"
-
-if ! codex exec --skip-git-repo-check -s workspace-write "$full_prompt" </dev/null >"$log" 2>&1; then
+if ! codex exec --skip-git-repo-check -s workspace-write -C "$codex_workdir" "$full_prompt" </dev/null >"$log" 2>&1; then
   echo "gpt-image-2: codex exec failed. Last 30 lines of log:" >&2
   tail -n 30 "$log" >&2
   echo "(full log: $log)" >&2
   exit 1
 fi
 
-if [[ ! -f "$out" ]]; then
-  echo "gpt-image-2: codex finished but $out was not created. Last 30 lines of log:" >&2
+img="$workdir/out.png"
+if [[ ! -f "$img" ]]; then
+  # Codex occasionally picks its own file name; fall back to the newest PNG.
+  img="$(ls -t "$workdir"/*.png 2>/dev/null | head -n 1 || true)"
+fi
+
+if [[ -z "$img" || ! -f "$img" ]]; then
+  echo "gpt-image-2: codex finished but produced no PNG in $workdir. Last 30 lines of log:" >&2
   tail -n 30 "$log" >&2
   echo "(full log: $log)" >&2
   exit 1
 fi
 
-rm -f "$log"
+cp "$img" "$out"
+# Cleanup is best-effort: a pinned temp file must never turn a successful
+# generation into a reported failure.
+rm -rf "$workdir" "$log" 2>/dev/null || true
 echo "$out"

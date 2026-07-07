@@ -1,6 +1,6 @@
 ---
 name: gpt-image-bridge
-description: Give Claude Code image generation by bridging to OpenAI's gpt-image-2 model through the codex CLI. Whenever the user asks for an image, a mockup, a visual reference, a diagram, a design, or any other kind of picture, use the bundled wrapper script to generate it.
+description: Use when the user asks for an image, mockup, logo, avatar, hero image, illustration, diagram, visual reference, or any generated picture, or when a design skill needs an image produced. Bridges to OpenAI's gpt-image-2 through the codex CLI using a ChatGPT subscription — no API key.
 ---
 
 # gpt-image-bridge
@@ -31,7 +31,7 @@ Do **not** invoke it for:
 - **Prompt** should be dense and art-directed: composition, lighting, camera/lens, mood, style reference. Terse prompts produce generic output.
 - **Output path** must be absolute. `/tmp/` works for throwaways; a project-local `design/` directory for kept assets.
 - **Size is optional** — if omitted, the model chooses its own dimensions. Only pass `--size` when the user specifies one or the layout requires a particular aspect ratio.
-- Calls can take a while (codex reasons before calling the image tool; exact latency depends on the user's codex `reasoning_effort` config). Set the `Bash` tool timeout generously — **at least 240000 ms** is safe.
+- Calls routinely take 4–6 minutes (codex reasons before calling the image tool; exact latency depends on the user's codex `reasoning_effort` config). Set the `Bash` tool timeout to the **maximum, 600000 ms**, or run it in the background and poll.
 - The wrapper prints the absolute output path to stdout on success, or a tail of the codex log to stderr on failure.
 
 After the wrapper returns, `Read` the PNG back into context so you can analyze it before coding or responding.
@@ -41,18 +41,19 @@ After the wrapper returns, `Read` the PNG back into context so you can analyze i
 The wrapper runs:
 
 ```
-codex exec --skip-git-repo-check -s workspace-write "<augmented prompt>"
+codex exec --skip-git-repo-check -s workspace-write -C <private-temp-dir> "<augmented prompt>"
 ```
 
-with explicit instructions to use the `image_generation` tool (not fabricate a PNG in Python — codex will try that if you let it). Codex writes the PNG to `~/.codex/generated_images/<session-id>/ig_*.png` and the wrapper copies it to the requested path.
+with explicit instructions to use the `image_generation` tool (not fabricate a PNG in Python — codex will try that if you let it). Codex saves the PNG as `out.png` inside the private temp dir — the only place its sandbox is guaranteed to allow writes — and the wrapper copies it to the requested output path. Codex never handles the final path, so sandbox denials and Windows/POSIX path mismatches can't occur, and the previous output file is only overwritten once a new image actually exists.
 
 ## Prerequisites (user-side)
 
-- `codex` CLI installed (`brew install codex` on macOS)
+- `codex` CLI installed (`brew install codex` on macOS, `npm install -g @openai/codex` anywhere)
 - `codex login status` reports "Logged in using ChatGPT" (ChatGPT Plus/Pro/Team subscription)
 - `image_generation` feature enabled — on by default (`codex features list | grep image_generation`)
+- macOS, Linux, or Windows (runs under Git Bash — the shell Claude Code already uses on Windows — or WSL)
 
-If the wrapper errors with "codex CLI not found", tell the user to run `brew install codex && codex login`.
+If the wrapper errors with "codex CLI not found", tell the user to run `brew install codex && codex login` (or `npm install -g @openai/codex`).
 
 ## Cost
 

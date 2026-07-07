@@ -28,13 +28,16 @@ if ! command -v codex >/dev/null 2>&1; then
 ⚠  codex CLI is not on your PATH. The skill will not work until you install it.
 
     macOS:     brew install codex
+    any OS:    npm install -g @openai/codex
     Then:      codex login        # log in with your ChatGPT subscription
 
 EOF
   exit 0
 fi
 
-if ! codex login status 2>/dev/null | grep -qi "logged in"; then
+# codex prints login status to stderr and exits nonzero when logged out,
+# so check the exit code rather than grepping a stream.
+if ! codex login status >/dev/null 2>&1; then
   echo ""
   echo "⚠  codex is installed but not logged in. Run: codex login" >&2
   exit 0
