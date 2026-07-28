@@ -2,9 +2,9 @@
 
 Generate images with OpenAI's `gpt-image-2` from a CLI coding agent by bridging through the [`codex` CLI](https://github.com/openai/codex). Uses your ChatGPT subscription — **no API key required, no per-image billing.**
 
-The bridge itself is a standalone bash script: any agent that can run a shell command can call it. The installer wires it in as a [Claude Code](https://docs.claude.com/en/docs/claude-code) skill so Claude invokes it on its own.
+The bridge is a standalone bash script — [Claude Code](https://docs.claude.com/en/docs/claude-code), Cursor, Gemini CLI, aider, or any other agent that can run a shell command can call it. Claude Code just gets the nicest ergonomics, because the included installer registers it as a skill so Claude reaches for it unprompted.
 
-Works with any design skill (like the [`image-taste-frontend`](https://github.com/Leonxlnx/taste-skill) skill from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill)) or on its own whenever Claude needs to produce a picture.
+Works with any design skill (like the [`image-taste-frontend`](https://github.com/Leonxlnx/taste-skill) skill from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill)) or on its own whenever your agent needs to produce a picture.
 
 ## What it is
 
@@ -21,7 +21,7 @@ Codex runs sandboxed and can only write inside its own working directory, so the
 
 ## Prerequisites
 
-- [Claude Code](https://docs.claude.com/en/docs/claude-code)
+- Any coding agent that can run shell commands — [Claude Code](https://docs.claude.com/en/docs/claude-code), Cursor, Gemini CLI, aider, or your own script
 - [`codex` CLI](https://github.com/openai/codex) installed (`brew install codex` on macOS, `npm install -g @openai/codex` anywhere)
 - A ChatGPT subscription (Plus / Pro / Team) logged in via `codex login`
 - macOS, Linux, or Windows — the wrapper is bash, which on Windows runs under Git Bash (the shell Claude Code already uses there) or WSL
@@ -35,7 +35,7 @@ codex features list | grep image_generation    # should be: stable true
 
 ## Install
 
-### Manual
+### Claude Code
 
 ```bash
 git clone https://github.com/oakplank/gpt-image-bridge.git
@@ -43,7 +43,29 @@ cd gpt-image-bridge
 ./install.sh
 ```
 
-The installer copies the skill into `~/.claude/skills/gpt-image-bridge/` and makes the wrapper executable. Claude Code picks up skills in that directory automatically — no further config needed.
+The installer copies the skill into `~/.claude/skills/gpt-image-bridge/` and makes the wrapper executable. Claude Code picks up skills in that directory automatically — no further config needed, and Claude will invoke the wrapper on its own when you ask for an image.
+
+### Any other agent
+
+There's nothing to install — the wrapper is a self-contained bash script with no dependencies beyond `codex`. Clone the repo, make it executable, and put it somewhere on your `PATH`:
+
+```bash
+git clone https://github.com/oakplank/gpt-image-bridge.git
+chmod +x gpt-image-bridge/skills/gpt-image-bridge/bin/gpt-image-2
+ln -s "$PWD/gpt-image-bridge/skills/gpt-image-bridge/bin/gpt-image-2" /usr/local/bin/gpt-image-2
+```
+
+(On Windows, skip the symlink and call the script by its full path, or add its directory to `PATH`.)
+
+Then tell your agent it exists. Most agents take a rules or instructions file — `.cursorrules`, `AGENTS.md`, `GEMINI.md`, a system prompt — and a couple of lines is enough:
+
+```
+To generate an image, run: gpt-image-2 "<detailed prompt>" <absolute-output-path.png> [--size WxH]
+Prompts should be dense and art-directed. Calls take 4-6 minutes, so allow a long timeout.
+Read the PNG back afterward to check the result.
+```
+
+[`skills/gpt-image-bridge/SKILL.md`](./skills/gpt-image-bridge/SKILL.md) is the full version of those instructions if your agent supports a longer brief. It's phrased for Claude Code, but the substance — prompt density, when to use it, when not to, timeout handling — applies anywhere.
 
 ### Agent install (paste this to your agent)
 
@@ -69,13 +91,15 @@ Report back when each step is done, and stop if any step fails.
 
 ## Usage
 
-Once installed, Claude will invoke the wrapper on its own whenever you ask it for an image. You can also call the wrapper directly:
+Once your agent knows about the wrapper it will invoke it whenever you ask for an image. You can also call it directly:
 
 ```bash
-~/.claude/skills/gpt-image-bridge/bin/gpt-image-2 \
+gpt-image-2 \
   "a photorealistic hummingbird hovering in front of a red desert canyon at golden hour, shallow depth of field, magazine quality" \
   /tmp/hummingbird.png
 ```
+
+If you installed via `install.sh` and didn't symlink it onto your `PATH`, the wrapper lives at `~/.claude/skills/gpt-image-bridge/bin/gpt-image-2`.
 
 Optional flags:
 
@@ -96,7 +120,7 @@ If you already pay for ChatGPT, the codex route is free at the margin. If you'd 
 
 ## Pair with a design skill
 
-This bridge is just the tool — it gives Claude the ability to call `gpt-image-2`, not the taste to know what a good image looks like. For art-directed frontend work, stack it under a design-taste skill:
+This bridge is just the tool — it gives your agent the ability to call `gpt-image-2`, not the taste to know what a good image looks like. For art-directed frontend work, stack it under a design-taste skill:
 
 - [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) by [@lexnlin](https://x.com/lexnlin) — high-agency frontend, anti-slop. The `image-taste-frontend` skill inside it is the one this bridge was originally built to feed.
 - Any other skill that follows an "image first, then code" workflow
