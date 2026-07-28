@@ -1,17 +1,19 @@
-# claude-gpt-image-bridge
+# gpt-image-bridge
 
-Give [Claude Code](https://docs.claude.com/en/docs/claude-code) image generation by bridging to OpenAI's `gpt-image-2` model through the [`codex` CLI](https://github.com/openai/codex). Uses your ChatGPT subscription — **no API key required, no per-image billing.**
+Generate images with OpenAI's `gpt-image-2` from a CLI coding agent by bridging through the [`codex` CLI](https://github.com/openai/codex). Uses your ChatGPT subscription — **no API key required, no per-image billing.**
+
+The bridge itself is a standalone bash script: any agent that can run a shell command can call it. The installer wires it in as a [Claude Code](https://docs.claude.com/en/docs/claude-code) skill so Claude invokes it on its own.
 
 Works with any design skill (like the [`image-taste-frontend`](https://github.com/Leonxlnx/taste-skill) skill from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill)) or on its own whenever Claude needs to produce a picture.
 
 ## What it is
 
-Claude Code doesn't ship with an image generation tool. This skill adds a thin bash wrapper that shells out to `codex exec`, which calls `gpt-image-2` using your existing ChatGPT authentication and copies the PNG where you asked. Claude then reads the PNG back into context.
+Coding agents don't ship with an image generation tool. This adds a thin bash wrapper that shells out to `codex exec`, which calls `gpt-image-2` using your existing ChatGPT authentication and copies the PNG where you asked. Your agent then reads the PNG back into context.
 
 ```
-Claude Code ──Bash──▶ gpt-image-2 wrapper ──codex exec──▶ gpt-image-2 (OpenAI)
+your agent ──shell──▶ gpt-image-2 wrapper ──codex exec──▶ gpt-image-2 (OpenAI)
                               │                                  │
-             Read PNG ◀── copies to your ◀──── out.png in a ◀────┘
+             read PNG ◀── copies to your ◀──── out.png in a ◀────┘
                           output path          private temp dir
 ```
 
@@ -36,8 +38,8 @@ codex features list | grep image_generation    # should be: stable true
 ### Manual
 
 ```bash
-git clone https://github.com/oakplank/claude-gpt-image-bridge.git
-cd claude-gpt-image-bridge
+git clone https://github.com/oakplank/gpt-image-bridge.git
+cd gpt-image-bridge
 ./install.sh
 ```
 
@@ -48,15 +50,15 @@ The installer copies the skill into `~/.claude/skills/gpt-image-bridge/` and mak
 Drop the block below into your Claude Code session (or any shell-capable AI agent) and it will install the skill for you, verify prereqs, and offer a smoke test.
 
 ```
-Please install the claude-gpt-image-bridge skill from https://github.com/oakplank/claude-gpt-image-bridge so I can generate images with gpt-image-2 through my ChatGPT subscription.
+Please install the gpt-image-bridge skill from https://github.com/oakplank/gpt-image-bridge so I can generate images with gpt-image-2 through my ChatGPT subscription.
 
 1. Check that the `codex` CLI is installed and logged in:
      codex login status
    It should say "Logged in using ChatGPT". If codex is missing or not logged in, stop and tell me to run `brew install codex && codex login` first.
 
 2. Clone and install:
-     git clone https://github.com/oakplank/claude-gpt-image-bridge.git /tmp/claude-gpt-image-bridge
-     cd /tmp/claude-gpt-image-bridge && ./install.sh
+     git clone https://github.com/oakplank/gpt-image-bridge.git /tmp/gpt-image-bridge
+     cd /tmp/gpt-image-bridge && ./install.sh
 
 3. Verify ~/.claude/skills/gpt-image-bridge/bin/gpt-image-2 exists and is executable.
 
