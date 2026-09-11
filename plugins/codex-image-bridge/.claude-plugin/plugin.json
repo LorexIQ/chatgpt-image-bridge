@@ -1,6 +1,6 @@
 {
   "name": "codex-image-bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Генерация и редактирование изображений через встроенный инструмент Codex CLI с авторизацией ChatGPT — без API-ключа OpenAI",
   "author": {
     "name": "LorexIQ",

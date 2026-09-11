@@ -216,6 +216,31 @@ codex_args
   && ok "отключает пользовательские и системные скиллы по имени, пропуская небезопасные имена" \
   || bad "skills.config" "args=$joined"
 
+# --- модель и reasoning effort ------------------------------------------------------
+echo "модель и reasoning effort"
+reset; STUB_MODE=generated run "cat" "$T/out/a.png"
+codex_args
+[[ $code -eq 0 && "$joined" == *'<-m><gpt-5.6-sol>'* && "$joined" == *'<-c><model_reasoning_effort="low">'* ]] \
+  && ok "по умолчанию gpt-5.6-sol и effort low, независимо от конфига codex" \
+  || bad "модель и effort по умолчанию" "exit=$code args=$joined"
+
+reset; CODEX_IMAGE_MODEL=gpt-6-astra CODEX_IMAGE_EFFORT=medium STUB_MODE=generated run "cat" "$T/out/a.png"
+codex_args
+[[ $code -eq 0 && "$joined" == *'<-m><gpt-6-astra>'* && "$joined" == *'<-c><model_reasoning_effort="medium">'* \
+   && "$joined" != *'gpt-5.6-sol'* && "$joined" != *'"low"'* ]] \
+  && ok "CODEX_IMAGE_MODEL и CODEX_IMAGE_EFFORT переопределяют значения" \
+  || bad "переопределение через окружение" "exit=$code args=$joined"
+
+reset; CODEX_IMAGE_EFFORT='low" evil' run "cat" "$T/out/a.png"
+[[ $code -eq 2 && ! -e "$STUB_ARGS" && "$(cat "$T/stderr")" == *"CODEX_IMAGE_EFFORT"* ]] \
+  && ok "некорректный CODEX_IMAGE_EFFORT: код 2 до вызова codex" \
+  || bad "некорректный effort" "exit=$code stderr=$(cat "$T/stderr")"
+
+reset; CODEX_IMAGE_MODEL='gpt 5' run "cat" "$T/out/a.png"
+[[ $code -eq 2 && ! -e "$STUB_ARGS" && "$(cat "$T/stderr")" == *"CODEX_IMAGE_MODEL"* ]] \
+  && ok "некорректный CODEX_IMAGE_MODEL: код 2 до вызова codex" \
+  || bad "некорректная модель" "exit=$code stderr=$(cat "$T/stderr")"
+
 echo
 echo "пройдено: $pass, упало: $fail"
 [[ $fail -eq 0 ]]

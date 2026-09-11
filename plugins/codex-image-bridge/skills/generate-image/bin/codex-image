@@ -56,6 +56,20 @@ if [[ -n "$size" && ! "$size" =~ ^[0-9]+x[0-9]+$ ]]; then
   exit 2
 fi
 
+# Модель codex только передаёт промпт инструменту картинок — рисует сам
+# инструмент, поэтому дорогая модель и долгое рассуждение тратят лимиты зря.
+# Фиксируем дешёвую модель и effort low независимо от конфига codex.
+model="${CODEX_IMAGE_MODEL:-gpt-5.6-sol}"
+effort="${CODEX_IMAGE_EFFORT:-low}"
+if [[ ! "$model" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+  echo "codex-image: некорректное имя модели в CODEX_IMAGE_MODEL: $model" >&2
+  exit 2
+fi
+if [[ ! "$effort" =~ ^[a-z]+$ ]]; then
+  echo "codex-image: некорректный уровень в CODEX_IMAGE_EFFORT: $effort (например low, medium, high)" >&2
+  exit 2
+fi
+
 if ! command -v codex >/dev/null 2>&1; then
   echo "codex-image: codex CLI не найден в PATH. Установите его (npm install -g @openai/codex или brew install codex) и выполните codex login." >&2
   exit 127
@@ -116,6 +130,8 @@ for feature in "${unneeded_features[@]}"; do
 done
 
 codex_flags+=(
+  -m "$model"
+  -c "model_reasoning_effort=\"${effort}\""
   -c 'web_search="disabled"'
   -c 'notify=[]'
   -c project_doc_max_bytes=0
