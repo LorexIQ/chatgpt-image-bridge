@@ -1,143 +1,156 @@
-# gpt-image-bridge
+# codex-image-bridge
 
-Generate images with OpenAI's `gpt-image-2` from a CLI coding agent by bridging through the [`codex` CLI](https://github.com/openai/codex). Uses your ChatGPT subscription — **no API key required, no per-image billing.**
+Маркетплейс для [Claude Code](https://code.claude.com) с плагином, который даёт агенту генерацию и редактирование изображений. Картинки создаёт встроенный инструмент `image_generation` из [Codex CLI](https://github.com/openai/codex), авторизованного через подписку ChatGPT, — **API-ключ OpenAI не нужен, поштучной оплаты нет.**
 
-The bridge is a standalone bash script — [Claude Code](https://docs.claude.com/en/docs/claude-code), Cursor, Gemini CLI, aider, or any other agent that can run a shell command can call it. Claude Code just gets the nicest ergonomics, because the included installer registers it as a skill so Claude reaches for it unprompted.
+Внутри — один скилл `generate-image` и bash-скрипт `codex-image`. Скрипт самодостаточен, так что его может вызывать и любой другой агент, умеющий запускать shell-команды.
 
-Works with any design skill (like the [`image-taste-frontend`](https://github.com/Leonxlnx/taste-skill) skill from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill)) or on its own whenever your agent needs to produce a picture.
+Проект — переработанный форк [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge), подробности в разделе [«Отличия от оригинала»](#отличия-от-оригинала).
 
-## What it is
-
-Coding agents don't ship with an image generation tool. This adds a thin bash wrapper that shells out to `codex exec`, which calls `gpt-image-2` using your existing ChatGPT authentication and copies the PNG where you asked. Your agent then reads the PNG back into context.
+## Как это работает
 
 ```
-your agent ──shell──▶ gpt-image-2 wrapper ──codex exec──▶ gpt-image-2 (OpenAI)
-                              │                                  │
-             read PNG ◀── copies to your ◀──── out.png in a ◀────┘
-                          output path          private temp dir
+агент ──bash──▶ codex-image ──codex exec──▶ image_generation (Codex, ChatGPT)
+                     │                                │
+ Read PNG ◀── копия в нужный ◀── generated_images/ ◀──┘
+              путь              <session id>/
 ```
 
-Codex runs sandboxed and can only write inside its own working directory, so the wrapper points it at a private temp dir and performs the final copy itself. That keeps arbitrary output paths (and Windows paths) working reliably.
+1. Скрипт запускает `codex exec` во временной папке в облегчённом режиме — без плагинов, MCP-серверов, скиллов и прочей обвязки, которая не нужна для картинки.
+2. Codex вызывает инструмент `image_generation` и сохраняет результат в `$CODEX_HOME/generated_images/<session id>/`.
+3. Скрипт находит session id в логе codex, копирует оттуда картинку в запрошенный путь и печатает этот путь.
+4. Агент открывает PNG и проверяет результат.
 
-## Prerequisites
+Codex не работает с итоговым путём, поэтому песочница его не блокирует, а путаница путей Windows/POSIX исключена.
 
-- Any coding agent that can run shell commands — [Claude Code](https://docs.claude.com/en/docs/claude-code), Cursor, Gemini CLI, aider, or your own script
-- [`codex` CLI](https://github.com/openai/codex) installed (`brew install codex` on macOS, `npm install -g @openai/codex` anywhere)
-- A ChatGPT subscription (Plus / Pro / Team) logged in via `codex login`
-- macOS, Linux, or Windows — the wrapper is bash, which on Windows runs under Git Bash (the shell Claude Code already uses there) or WSL
+## Требования
 
-Verify:
+- [Codex CLI](https://github.com/openai/codex): `npm install -g @openai/codex` (на macOS также `brew install codex`).
+- Вход в codex через подписку ChatGPT: `codex login`.
+- bash: на macOS и Linux есть из коробки, на Windows — Git Bash (им же пользуется Claude Code) или WSL.
+
+Проверка:
 
 ```bash
-codex login status   # should say: Logged in using ChatGPT
-codex features list | grep image_generation    # should be: stable true
+codex login status                           # Logged in using ChatGPT
+codex features list | grep image_generation  # image_generation  stable  true
 ```
 
-## Install
+## Установка
 
-### Claude Code
+### Claude Code через маркетплейс
+
+В сессии Claude Code:
+
+```
+/plugin marketplace add LorexIQ/codex-image-bridge
+/plugin install codex-image-bridge@codex-image-bridge
+```
+
+Или из терминала:
 
 ```bash
-git clone https://github.com/oakplank/gpt-image-bridge.git
-cd gpt-image-bridge
-./install.sh
+claude plugin marketplace add LorexIQ/codex-image-bridge
+claude plugin install codex-image-bridge@codex-image-bridge
 ```
 
-The installer copies the skill into `~/.claude/skills/gpt-image-bridge/` and makes the wrapper executable. Claude Code picks up skills in that directory automatically — no further config needed, and Claude will invoke the wrapper on its own when you ask for an image.
+После перезапуска сессии Claude сам будет использовать скилл, когда вы попросите картинку. Вызвать его явно — `/codex-image-bridge:generate-image`.
 
-### Any other agent
+### Claude Code без маркетплейса
 
-There's nothing to install — the wrapper is a self-contained bash script with no dependencies beyond `codex`. Clone the repo, make it executable, and put it somewhere on your `PATH`:
+Скопируйте папку скилла в личные скиллы:
 
 ```bash
-git clone https://github.com/oakplank/gpt-image-bridge.git
-chmod +x gpt-image-bridge/skills/gpt-image-bridge/bin/gpt-image-2
-ln -s "$PWD/gpt-image-bridge/skills/gpt-image-bridge/bin/gpt-image-2" /usr/local/bin/gpt-image-2
+git clone https://github.com/LorexIQ/codex-image-bridge.git
+cp -R codex-image-bridge/plugins/codex-image-bridge/skills/generate-image ~/.claude/skills/
 ```
 
-(On Windows, skip the symlink and call the script by its full path, or add its directory to `PATH`.)
+Путь к скрипту в SKILL.md задан через `${CLAUDE_SKILL_DIR}`, поэтому скилл работает из любого места установки. Не ставьте его одновременно двумя способами.
 
-Then tell your agent it exists. Most agents take a rules or instructions file — `.cursorrules`, `AGENTS.md`, `GEMINI.md`, a system prompt — and a couple of lines is enough:
+### Другие агенты
 
-```
-To generate an image, run: gpt-image-2 "<detailed prompt>" <absolute-output-path.png> [--size WxH]
-Prompts should be dense and art-directed. Calls take 4-6 minutes, so allow a long timeout.
-Read the PNG back afterward to check the result.
-```
-
-[`skills/gpt-image-bridge/SKILL.md`](./skills/gpt-image-bridge/SKILL.md) is the full version of those instructions if your agent supports a longer brief. It's phrased for Claude Code, but the substance — prompt density, when to use it, when not to, timeout handling — applies anywhere.
-
-### Agent install (paste this to your agent)
-
-Drop the block below into your Claude Code session (or any shell-capable AI agent) and it will install the skill for you, verify prereqs, and offer a smoke test.
+Скрипт `plugins/codex-image-bridge/skills/generate-image/bin/codex-image` не зависит ни от чего, кроме bash и codex. Сообщите агенту о нём в его файле инструкций (`AGENTS.md`, `GEMINI.md`, `.cursorrules` и т. п.):
 
 ```
-Please install the gpt-image-bridge skill from https://github.com/oakplank/gpt-image-bridge so I can generate images with gpt-image-2 through my ChatGPT subscription.
-
-1. Check that the `codex` CLI is installed and logged in:
-     codex login status
-   It should say "Logged in using ChatGPT". If codex is missing or not logged in, stop and tell me to run `brew install codex && codex login` first.
-
-2. Clone and install:
-     git clone https://github.com/oakplank/gpt-image-bridge.git /tmp/gpt-image-bridge
-     cd /tmp/gpt-image-bridge && ./install.sh
-
-3. Verify ~/.claude/skills/gpt-image-bridge/bin/gpt-image-2 exists and is executable.
-
-4. Once installed, offer to smoke-test by generating a small image to /tmp/test.png and opening it so I can confirm it works end-to-end. Use the maximum Bash timeout (600000 ms) — codex reasons before the image tool fires and calls routinely take 4-6 minutes.
-
-Report back when each step is done, and stop if any step fails.
+Чтобы сгенерировать картинку, выполни: bash <путь>/codex-image "<подробный промпт>" <абсолютный-путь.png> [--size WxH] [--image <файл>]
+Генерация занимает несколько минут — ставь большой таймаут. После вызова открой PNG и проверь результат.
 ```
 
-## Usage
+Полная версия инструкций — в [SKILL.md](./plugins/codex-image-bridge/skills/generate-image/SKILL.md).
 
-Once your agent knows about the wrapper it will invoke it whenever you ask for an image. You can also call it directly:
+## Использование
+
+Скрипт можно вызвать и напрямую:
 
 ```bash
-gpt-image-2 \
-  "a photorealistic hummingbird hovering in front of a red desert canyon at golden hour, shallow depth of field, magazine quality" \
+bash plugins/codex-image-bridge/skills/generate-image/bin/codex-image \
+  "фотореалистичная колибри перед красным каньоном в золотой час, малая глубина резкости, журнальное качество" \
   /tmp/hummingbird.png
 ```
 
-If you installed via `install.sh` and didn't symlink it onto your `PATH`, the wrapper lives at `~/.claude/skills/gpt-image-bridge/bin/gpt-image-2`.
+Параметры:
 
-Optional flags:
+- `--size WxH` — желаемый размер, например `--size 1536x1024`. Без него размер выбирает модель.
+- `--image <файл>` — исходная картинка для редактирования или референс. Можно указать несколько раз. Картинка прикладывается к запросу и передаётся инструменту как `referenced_image_paths`.
 
-- `--size WxH` — request a specific aspect ratio (e.g. `--size 1792x1024`). If omitted, the model picks its own dimensions.
+Коды выхода:
 
-On success the wrapper prints the absolute output path. On failure it prints the tail of the codex log to stderr.
-
-## Why go through codex instead of calling the API directly?
-
-| | Through codex | Direct OpenAI API |
+| Код | Что значит | Вывод |
 | --- | --- | --- |
-| Auth | Your ChatGPT subscription | Requires API key |
-| Cost | Uses ChatGPT message quota | Per-image billing |
-| Speed | Slower (codex reasons before calling the image tool) | Faster |
-| Prompt quality | codex refines your prompt with gpt-5.4 before generating | Passed verbatim |
+| 0 | Картинка готова | stdout: абсолютный путь (на Windows в виде `C:/...`) |
+| 1 | Codex завершился с ошибкой или инструмент не сохранил картинку | stderr: последние 30 строк лога и путь к полному логу |
+| 2 | Ошибка аргументов | stderr: сообщение об ошибке |
+| 127 | codex не найден в PATH | stderr: как установить |
 
-If you already pay for ChatGPT, the codex route is free at the margin. If you'd rather pay per image for speed, call the [Images API](https://platform.openai.com/docs/api-reference/images) directly — this bridge is for the subscription route.
+Временные файлы удаляются при любом завершении, в том числе по Ctrl+C и таймауту: скрипт останавливает codex вместе с дочерними процессами. После ошибки остаётся только лог, на который указывает сообщение.
 
-## Pair with a design skill
+## Облегчённый запуск codex
 
-This bridge is just the tool — it gives your agent the ability to call `gpt-image-2`, not the taste to know what a good image looks like. For art-directed frontend work, stack it under a design-taste skill:
+Для генерации картинки агентная обвязка codex не нужна, а каждая её часть стоит времени на старте или токенов на каждом вызове. Скрипт выключает:
 
-- [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) by [@lexnlin](https://x.com/lexnlin) — high-agency frontend, anti-slop. The `image-taste-frontend` skill inside it is the one this bridge was originally built to feed.
-- Any other skill that follows an "image first, then code" workflow
+- **фичи:** плагины, apps, browser и computer use, мультиагентность, shell и `unified_exec`, `view_image`, sleep, hooks, goals, guardian, personality, бесконечные переподключения и другие;
+- **конфиг:** web search, команду `notify`, `AGENTS.md`, память, аналитику, feedback, историю, проверку обновлений, встроенные скиллы;
+- **по имени:** каждый MCP-сервер из конфига codex (по `codex mcp list --json`) и каждый скилл из `~/.codex/skills` и `~/.agents/skills`.
 
-Install one alongside `gpt-image-bridge` and it'll automatically use the wrapper for its image-generation steps:
+Остаются включёнными `image_generation`, `code_mode_host` (инструмент картинок доступен только через code mode), сжатие запросов и хранилище авторизации. Модель, reasoning effort и настройки песочницы берутся из вашего конфига codex.
+
+`--disable` получает только фичи, которые есть в `codex features list` установленной версии: неизвестное имя codex считает ошибкой.
+
+Замер на codex-cli 0.154 (запрос перехватывался локальным сервером, до OpenAI не доходил):
+
+| | Обычный запуск | Облегчённый |
+| --- | --- | --- |
+| Размер запроса к модели | 86 КБ | 47 КБ |
+| Время до первого запроса | 2,1–3,9 с | 1,0–1,9 с |
+| Процессы MCP и плагинов | запускаются | нет |
+
+## Ограничения
+
+- **Время.** Генерация обычно занимает несколько минут; при вызове из агента ставьте таймаут побольше или запускайте в фоне.
+- **Лимиты.** Вызовы расходуют лимиты Codex в вашем плане ChatGPT — те же, что и обычная работа в Codex.
+- **Зависимость от устройства codex.** Скрипт полагается на `session id` в логе и папку `generated_images`. Если новая версия codex это изменит, вызов завершится ошибкой с логом, а не вернёт непроверенную картинку.
+- **Условия использования.** `codex exec` — штатный неинтерактивный режим, но автоматизация подписки регулируется условиями OpenAI.
+
+## Тесты
 
 ```bash
-npx skills add https://github.com/Leonxlnx/taste-skill --skill image-taste-frontend -a claude-code
+bash tests/codex-image.test.sh
 ```
 
-## Caveats
+Тесты подменяют codex заглушкой: лимиты не тратятся, вход не нужен.
 
-- **Latency**: calls go through codex's reasoning loop before the image tool fires — expect 4–6 minutes per image. Latency depends on your codex `reasoning_effort` config.
-- **Quota**: ChatGPT subscriptions have message limits. Heavy automated use can hit rate caps.
-- **Terms of service**: using `codex` programmatically to drive image generation is within the spirit of the tool (codex is an official OpenAI product), but consumer-subscription automation is ultimately gated by OpenAI's terms. Use at your own risk.
-- **Bash required** — native on macOS/Linux; on Windows use Git Bash (bundled with Git for Windows, and what Claude Code uses there) or WSL.
+## Отличия от оригинала
 
-## License
+По сравнению с [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge):
 
-MIT — see [LICENSE](./LICENSE).
+- упаковано в маркетплейс Claude Code, путь к скрипту — через `${CLAUDE_SKILL_DIR}`;
+- картинка берётся только из `generated_images` — PNG, нарисованный моделью в обход инструмента, не принимается;
+- добавлен `--image` для редактирования и референсов;
+- облегчённый запуск codex без MCP, плагинов, скиллов и лишних инструментов;
+- уборка временных файлов и остановка дерева процессов codex при ошибке, Ctrl+C и таймауте;
+- проверка `--size`, пути в формате Windows на выходе;
+- тесты на заглушке codex;
+- документация и сообщения на русском.
+
+## Лицензия
+
+MIT — см. [LICENSE](./LICENSE). Исходный проект — © 2026 Jacob ([oakplank](https://github.com/oakplank)).

@@ -1,6 +1,5 @@
-# Bash scripts must keep LF endings everywhere — CRLF breaks them under WSL
-# and strict bash, and Windows checkouts with core.autocrlf=true would
-# otherwise convert them.
+# Bash-скрипты должны оставаться с LF: CRLF ломает их в WSL и строгом bash,
+# а checkout на Windows с core.autocrlf=true иначе сконвертировал бы их.
 * text=auto
 *.sh text eol=lf
-skills/gpt-image-bridge/bin/* text eol=lf
+**/bin/* text eol=lf
