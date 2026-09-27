@@ -1,0 +1,96 @@
+<!doctype html>
+<!--
+  Макет chatgpt.com для тестов chatgpt-image: та же разметка, по которой
+  скрипт находит поле ввода, кнопки, ответ и картинку (снята с настоящей
+  страницы). Режим задаётся в адресе: ?mode=ok|refusal|login|hang.
+  Всё, что скрипт ввёл и приложил, страница отправляет на /record.
+
+  Адрес /c/<id> — уже существующий разговор (как --chat): старые сообщения
+  со старой картинкой (file_old) появляются через 800 мс после загрузки, как
+  у настоящей страницы, где поле ввода готово раньше истории. Ответ на новое
+  сообщение приходит с задержкой — без ожидания истории скрипт принял бы
+  старую картинку за новую. В новом чате после отправки адрес, как на
+  chatgpt.com, меняется на /c/<id>; query остаётся, чтобы проверить, что
+  скрипт его отрезает.
+-->
+<meta charset="utf-8">
+<title>ChatGPT</title>
+<main id="thread"></main>
+<script>
+  const mode = new URLSearchParams(location.search).get('mode') || 'ok';
+  const existing = /^\/c\/[^/]+$/.test(location.pathname);
+  const thread = document.getElementById('thread');
+  const record = (data) => fetch('/record', { method: 'POST', body: JSON.stringify(data) });
+  let turn = 0;
+  const imageLayers = (src) => `<img alt="Сформированное изображение" src="${src}"><img alt="" src="${src}"><img alt="" src="${src}">`;
+
+  if (existing) {
+    setTimeout(() => {
+      thread.insertAdjacentHTML('afterbegin', `
+        <section data-testid="conversation-turn-1" data-turn="user"><div data-message-author-role="user">рыжий кот</div></section>
+        <section data-testid="conversation-turn-2" data-turn="assistant">
+          <div data-message-author-role="assistant">${imageLayers('/backend-api/estuary/content?id=file_old&sig=1')}</div>
+        </section>`);
+      turn = Math.max(turn, 2);
+    }, 800);
+  }
+
+  if (mode === 'login') {
+    document.body.insertAdjacentHTML('beforeend', '<button data-testid="login-button">Войти</button>');
+  } else {
+    document.body.insertAdjacentHTML('beforeend', `
+      <form id="composer">
+        <div id="thumbs"></div>
+        <div id="prompt-textarea" contenteditable="true" role="textbox"></div>
+        <input type="file" id="upload-photos" accept="image/*" multiple hidden>
+        <button type="button" id="composer-submit-button" data-testid="send-button">Отправить</button>
+      </form>`);
+
+    const upload = document.getElementById('upload-photos');
+    const send = document.getElementById('composer-submit-button');
+    upload.addEventListener('change', () => {
+      // Как у настоящего ChatGPT: пока файлы «загружаются», отправка недоступна.
+      send.setAttribute('aria-disabled', 'true');
+      setTimeout(() => {
+        for (const file of upload.files) {
+          const img = document.createElement('img');
+          img.src = URL.createObjectURL(file);
+          document.getElementById('thumbs').append(img);
+        }
+        send.setAttribute('aria-disabled', 'false');
+      }, 700);
+    });
+
+    send.addEventListener('click', () => {
+      const prompt = document.getElementById('prompt-textarea').innerText;
+      record({ prompt, files: [...upload.files].map((file) => file.name) });
+      if (existing) {
+        setTimeout(reply, 1500);
+      } else {
+        history.pushState(null, '', `/c/fake-conversation${location.search}`);
+        reply();
+      }
+    });
+
+    function reply() {
+      thread.insertAdjacentHTML('beforeend', `
+        <section data-testid="conversation-turn-${++turn}" data-turn="user"><div data-message-author-role="user"></div></section>
+        <section data-testid="conversation-turn-${++turn}" data-turn="assistant">
+          <div data-message-author-role="assistant"><p id="answer">Создание изображения 10 %</p></div>
+        </section>`);
+      document.body.insertAdjacentHTML('beforeend', '<button data-testid="stop-button" id="stop">Стоп</button>');
+      if (mode === 'hang') return;
+      setTimeout(() => {
+        const answer = document.getElementById('answer');
+        if (mode === 'refusal') {
+          answer.textContent = 'Я не могу создать такое изображение.';
+        } else {
+          answer.textContent = '';
+          // Один файл тремя слоями, как на настоящей странице.
+          answer.insertAdjacentHTML('beforeend', imageLayers('/backend-api/estuary/content?id=file_test&sig=1'));
+        }
+        document.getElementById('stop').remove();
+      }, 1500);
+    }
+  }
+</script>

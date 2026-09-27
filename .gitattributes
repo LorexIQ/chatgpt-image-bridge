@@ -1,5 +1,7 @@
 # Bash-скрипты должны оставаться с LF: CRLF ломает их в WSL и строгом bash,
 # а checkout на Windows с core.autocrlf=true иначе сконвертировал бы их.
+# Скрипты Node — тоже: с CRLF shebang `#!/usr/bin/env node` не работает на POSIX.
 * text=auto
 *.sh text eol=lf
+*.mjs text eol=lf
 **/bin/* text eol=lf

@@ -1,18 +1,247 @@
-# codex-image-bridge
+# chatgpt-image-bridge
 
-Маркетплейс для [Claude Code](https://code.claude.com) с плагином, который даёт агенту генерацию и редактирование изображений. Картинки создаёт встроенный инструмент `image_generation` из [Codex CLI](https://github.com/openai/codex), авторизованного через подписку ChatGPT, — **API-ключ OpenAI не нужен, поштучной оплаты нет.**
+Маркетплейс для [Claude Code](https://code.claude.com) с плагином `chatgpt-image-bridge`, который даёт агенту генерацию и редактирование изображений на подписке ChatGPT, — **API-ключ OpenAI не нужен, поштучной оплаты нет.**
 
-Внутри — один скилл `generate-image` и bash-скрипт `codex-image`. Скрипт самодостаточен, так что его может вызывать и любой другой агент, умеющий запускать shell-команды.
+Рисовать плагин умеет двумя способами — режимами:
 
-Проект — переработанный форк [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge), подробности в разделе [«Отличия от оригинала»](#отличия-от-оригинала).
+| | [web](#режим-web) (по умолчанию) | [codex](#режим-codex) |
+| --- | --- | --- |
+| Как рисует | веб-интерфейс ChatGPT: скрипт отправляет промпт на chatgpt.com в браузере и скачивает картинку | встроенный инструмент `image_generation` из [Codex CLI](https://github.com/openai/codex) через `codex exec` |
+| Что нужно | Node.js 22+, Chrome или Edge, вход в ChatGPT | Codex CLI со входом через ChatGPT, bash, Node.js |
+| Доработка картинки | в том же чате: `--chat` и описание правок | новым вызовом с прошлой картинкой в `--image` |
+| `--size` | подсказка о пропорциях, размер выбирает ChatGPT | размер для инструмента картинок |
+| Время | 30–90 секунд плюс запуск браузера | обычно несколько минут |
+| Лимиты | генерации картинок в плане ChatGPT | Codex в плане ChatGPT |
 
-## Как это работает
+`codex exec` — штатный неинтерактивный режим, поэтому codex надёжнее: он не зависит от разметки chatgpt.com и не упирается во вход и проверки Cloudflare. Режим web не требует Codex CLI и умеет дорабатывать картинку в диалоге.
+
+Внутри плагина — скилл `generate-image` и команда `/chatgpt-image-bridge:image-mode`. Скилл всегда вызывает одну точку входа, `image-bridge.mjs`, а она выбирает режим и передаёт вызов скрипту этого режима:
 
 ```
-агент ──bash──▶ codex-image ──codex exec──▶ image_generation (Codex, ChatGPT)
-                     │                                │
- Read PNG ◀── копия в нужный ◀── generated_images/ ◀──┘
-              путь              <session id>/
+агент ──▶ image-bridge.mjs ──┬─ web ───▶ chatgpt-image.mjs ──DevTools──▶ Chrome ──▶ chatgpt.com
+                             └─ codex ─▶ codex-image ──codex exec──▶ image_generation (Codex)
+```
+
+Скрипты самодостаточны, так что их может вызывать и любой другой агент, умеющий запускать shell-команды. Режим codex — переработанный форк [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge), подробности в разделе [«Отличия от оригинала»](#отличия-от-оригинала).
+
+## Как выбирается режим
+
+Режим берётся из первого заданного источника:
+
+1. `--via codex` или `--via web` в самом вызове — разовый выбор. Claude добавляет его, только если вы в запросе явно попросили способ («эту нарисуй через codex»).
+2. Переменная окружения `CHATGPT_IMAGE_MODE`.
+3. Ключ `"mode"` в `~/.chatgpt-image/config.json` (папку можно переопределить переменной `CHATGPT_IMAGE_HOME`).
+4. По умолчанию — `web`.
+
+Неверное значение в любом из источников — ошибка с кодом 2 и названием источника, а не тихий откат к web.
+
+Переключить режим насовсем можно тремя способами:
+
+- командой `/chatgpt-image-bridge:image-mode codex` или `/chatgpt-image-bridge:image-mode web`; без аргумента она покажет текущий режим;
+- попросить Claude: «генерируй через codex», «переключись на браузер» — скилл сам сохранит режим;
+- из терминала:
+
+  ```bash
+  node plugins/chatgpt-image-bridge/skills/generate-image/bin/image-bridge.mjs mode         # web (по умолчанию)
+  node plugins/chatgpt-image-bridge/skills/generate-image/bin/image-bridge.mjs mode codex   # codex (config.json)
+  ```
+
+Режим записывается в `config.json` рядом с остальными настройками, например `{ "projectUrl": "https://chatgpt.com/g/g-p-…/project", "mode": "codex" }`; другие ключи не меняются. В скобках `mode` показывает, откуда взят режим: `по умолчанию`, `config.json` или `CHATGPT_IMAGE_MODE`. Пока задана переменная, она важнее файла, о чём `mode` предупредит при переключении.
+
+## Установка
+
+### Claude Code через маркетплейс
+
+В сессии Claude Code:
+
+```
+/plugin marketplace add LorexIQ/chatgpt-image-bridge
+/plugin install chatgpt-image-bridge@chatgpt-image-bridge
+```
+
+Или из терминала:
+
+```bash
+claude plugin marketplace add LorexIQ/chatgpt-image-bridge
+claude plugin install chatgpt-image-bridge@chatgpt-image-bridge
+```
+
+После перезапуска сессии Claude сам будет использовать скилл, когда вы попросите картинку. Вызвать его явно — `/chatgpt-image-bridge:generate-image`. Потом настройте выбранный режим: для web — один раз войдите в ChatGPT (см. [«Первая настройка»](#первая-настройка)), для codex — выполните `codex login` и переключите режим: `/chatgpt-image-bridge:image-mode codex`.
+
+### Переход со старых плагинов
+
+Раньше маркетплейс назывался `codex-image-bridge` и содержал два плагина: `codex-image-bridge` (скилл `generate-image`) и `chatgpt-web-image` (скилл `generate-image-web`). Теперь это один плагин с двумя режимами. Удалите старые плагины и маркетплейс, а потом установите новый, как описано выше:
+
+```
+/plugin uninstall codex-image-bridge@codex-image-bridge
+/plugin uninstall chatgpt-web-image@codex-image-bridge
+/plugin marketplace remove codex-image-bridge
+```
+
+Из терминала — `claude plugin uninstall …` и `claude plugin marketplace remove codex-image-bridge`. Удаление маркетплейса удаляет и установленные из него плагины.
+
+Папка `~/.chatgpt-image` — профиль браузера со входом в ChatGPT и `projectUrl` — остаётся как есть, входить заново не нужно. Если вы пользовались плагином `codex-image-bridge`, учтите, что по умолчанию теперь режим web: чтобы рисовать через codex, как раньше, выполните `/chatgpt-image-bridge:image-mode codex`.
+
+### Claude Code без маркетплейса
+
+Скопируйте папку скилла в личные скиллы:
+
+```bash
+git clone https://github.com/LorexIQ/chatgpt-image-bridge.git
+cp -R chatgpt-image-bridge/plugins/chatgpt-image-bridge/skills/generate-image ~/.claude/skills/
+```
+
+Путь к скрипту в SKILL.md задан через `${CLAUDE_SKILL_DIR}`, поэтому скилл работает из любого места установки. Команда `/chatgpt-image-bridge:image-mode` приходит только с плагином — без неё режим переключают просьбой к Claude или командой `mode` из терминала. Не ставьте скилл одновременно двумя способами.
+
+### Другие агенты
+
+Точке входа `plugins/chatgpt-image-bridge/skills/generate-image/bin/image-bridge.mjs` нужны только Node.js и то, что требует выбранный режим. Сообщите агенту о ней в его файле инструкций (`AGENTS.md`, `GEMINI.md`, `.cursorrules` и т. п.):
+
+```
+Чтобы сгенерировать картинку, выполни: node <путь>/image-bridge.mjs "<подробный промпт>" <абсолютный-путь.png> [--size WxH] [--image <файл>]
+Генерация занимает до нескольких минут — ставь большой таймаут. После вызова открой картинку по пути из первой строки вывода и проверь результат.
+```
+
+Полная версия инструкций — в [SKILL.md](./plugins/chatgpt-image-bridge/skills/generate-image/SKILL.md).
+
+## Использование
+
+Скрипт можно вызвать и напрямую:
+
+```bash
+node plugins/chatgpt-image-bridge/skills/generate-image/bin/image-bridge.mjs \
+  "фотореалистичная колибри перед красным каньоном в золотой час, малая глубина резкости, журнальное качество" \
+  /tmp/hummingbird.png
+```
+
+Параметры:
+
+- `--size WxH` — желаемый размер, например `--size 1536x1024`. В режиме codex передаётся инструменту картинок, в режиме web — только подсказка о пропорциях. Без него размер выбирает модель.
+- `--image <файл>` — исходная картинка для редактирования или референс. Можно указать несколько раз.
+- `--chat <адрес>` — только web: продолжить существующий разговор ChatGPT, см. [«Доработка в том же разговоре»](#доработка-в-том-же-разговоре).
+- `--via codex|web` — режим для этого вызова, важнее всех настроек.
+
+Кроме генерации, есть две команды:
+
+- `image-bridge.mjs login [--via codex|web]` — в режиме web открывает окно входа в ChatGPT, в режиме codex только напоминает, что вход выполняется командой `codex login`;
+- `image-bridge.mjs mode [codex|web]` — показать или переключить режим.
+
+Коды выхода — те же, что у скрипта выбранного режима:
+
+| Код | Что значит | Вывод |
+| --- | --- | --- |
+| 0 | Картинка готова | stdout: абсолютный путь (на Windows в виде `C:/...`); в режиме web второй строкой `chat: <адрес разговора>`, если адрес известен |
+| 1 | codex: codex завершился с ошибкой или инструмент не сохранил картинку. web: ChatGPT не выдал картинку — ответил текстом, не успел за таймаут или страница выглядит не так, как ожидалось | stderr: codex — последние 30 строк лога и путь к полному логу; web — причина (для текстового ответа сам текст) и путь к скриншоту и HTML страницы |
+| 2 | Ошибка аргументов, неверный режим, `--chat` в режиме codex или ошибка в `config.json` | stderr: сообщение об ошибке |
+| 3 | Только web: нужно действие пользователя — нет входа, проверка Cloudflare или открыто окно входа | stderr: что сделать |
+| 127 | codex: нет codex в PATH или bash. web: нет Node.js 22+ или Chrome/Edge | stderr: что установить |
+
+Скрипты убирают за собой при любом завершении, в том числе по Ctrl+C и таймауту: `codex-image` останавливает codex вместе с дочерними процессами и удаляет временные файлы (после ошибки остаётся только лог, на который указывает сообщение), `chatgpt-image.mjs` закрывает браузер. `image-bridge.mjs` передаёт сигналы скрипту режима и возвращает его код выхода.
+
+Общие переменные окружения:
+
+| Переменная | По умолчанию | Что задаёт |
+| --- | --- | --- |
+| `CHATGPT_IMAGE_MODE` | — | режим `codex` или `web`; важнее `config.json` |
+| `CHATGPT_IMAGE_HOME` | `~/.chatgpt-image` | папка с `config.json` (режим и `projectUrl`), профилем браузера и замком профиля |
+
+Переменные отдельных режимов — в их разделах.
+
+## Режим web
+
+Картинки рисует сам ChatGPT в своём веб-интерфейсе: скрипт `chatgpt-image.mjs` открывает chatgpt.com в браузере, отправляет промпт и скачивает результат. Codex не нужен, а картинку можно доработать следующим сообщением в том же чате.
+
+Скрипт написан на Node без зависимостей: он запускает системный Chrome или Edge и управляет им через DevTools Protocol.
+
+### Как это работает
+
+```
+агент ──▶ image-bridge.mjs ──▶ chatgpt-image.mjs ──DevTools──▶ Chrome ──▶ chatgpt.com
+                                        │                                      │
+ Read PNG ◀──── файл в нужный ◀──── fetch со страницы ◀──── ответ ◀────────────┘
+                путь + chat:                                с картинкой
+```
+
+1. Скрипт запускает Chrome (или Edge) с отдельным профилем `~/.chatgpt-image/profile`. Окно открывается за краем экрана, флагов, скрывающих автоматизацию, нет — это обычный браузер с открытым портом отладки.
+2. Открывает новый чат в проекте ChatGPT из `config.json` (без него — просто новый чат, с `--chat` — существующий разговор), прикладывает референсы и отправляет промпт с короткой инструкцией нарисовать картинку.
+3. Ждёт, пока в ответе появится готовая картинка, и скачивает её запросом изнутри страницы, с куками сессии.
+4. Сохраняет файл, печатает путь и адрес разговора и закрывает браузер. Агент открывает PNG и проверяет результат.
+
+### Требования
+
+- Node.js 22 или новее: скрипт использует встроенный в Node WebSocket.
+- Google Chrome или Microsoft Edge. Другой браузер на Chromium можно указать в `CHATGPT_IMAGE_BROWSER`.
+- Подписка ChatGPT с генерацией картинок.
+
+### Первая настройка
+
+1. **Вход.** Выполните один раз (или просто попросите картинку: при коде 3 скилл сам запустит вход):
+
+   ```bash
+   node plugins/chatgpt-image-bridge/skills/generate-image/bin/image-bridge.mjs login
+   ```
+
+   Если сейчас выбран режим codex, добавьте `--via web`. Откроется обычное окно браузера с профилем скрипта — без DevTools, иначе проверка Cloudflare на auth.openai.com не пропускает. Войдите в ChatGPT и закройте окно.
+2. **Прокси.** Если chatgpt.com открывается только через прокси, установите в этом же окне то же расширение прокси, что и в основном браузере: профиль скрипта отдельный. Скрипт дожидается запуска расширения, прежде чем открыть chatgpt.com.
+3. **Проект (по желанию).** Во временном чате ChatGPT картинки не рисует, поэтому каждая генерация — обычный чат. Чтобы они не засоряли историю, создайте в ChatGPT проект и укажите его адрес в `~/.chatgpt-image/config.json`:
+
+   ```json
+   { "projectUrl": "https://chatgpt.com/g/g-p-…/project" }
+   ```
+
+### Доработка в том же разговоре
+
+После генерации скрипт печатает адрес разговора:
+
+```
+/tmp/hummingbird.png
+chat: https://chatgpt.com/g/g-p-…/c/…
+```
+
+Чтобы поправить картинку, передайте этот адрес в `--chat`, а в промпте опишите только изменения:
+
+```bash
+node plugins/chatgpt-image-bridge/skills/generate-image/bin/image-bridge.mjs \
+  "сделай небо фиолетовым" /tmp/hummingbird-2.png --chat https://chatgpt.com/g/g-p-…/c/…
+```
+
+`--chat` принимает адреса вида `https://chatgpt.com/c/<id>` и `https://chatgpt.com/g/<id>/c/<id>`. Референсы, приложенные раньше, ChatGPT уже видит, повторять их не нужно. Скрипт ждёт, пока загрузятся старые сообщения, чтобы не принять прошлую картинку за новую.
+
+Подробности параметров в этом режиме:
+
+- `--size` добавляет в промпт соотношение сторон: в веб-интерфейсе нет параметра размера, фактический размер выбирает ChatGPT.
+- `--image` прикладывает файл к сообщению так же, как при выборе файла вручную.
+- Если ChatGPT вернул не тот формат, что в имени файла, скрипт исправляет расширение и печатает фактический путь.
+- Если прошлый вызов был убит и оставил браузер, следующий вызов его закроет.
+
+Переменные окружения:
+
+| Переменная | По умолчанию | Что задаёт |
+| --- | --- | --- |
+| `CHATGPT_IMAGE_TIMEOUT` | `300` | сколько секунд ждать картинку; столько же вызов ждёт своей очереди к профилю |
+| `CHATGPT_IMAGE_BROWSER` | Chrome, иначе Edge | путь к исполняемому файлу браузера |
+
+`CHATGPT_IMAGE_URL` и `CHATGPT_IMAGE_HEADLESS` нужны только тестам.
+
+### Ограничения
+
+- **Зависимость от интерфейса ChatGPT.** Скрипт находит поле ввода, кнопки и картинку по разметке chatgpt.com. Если её изменят, вызов завершится ошибкой, а чинить нужно только `lib/chatgpt.mjs` — там собраны все адреса и селекторы.
+- **Один вызов за раз.** Два браузера на одном профиле не работают, поэтому вызовы встают в очередь.
+- **Вход и проверки — за пользователем.** Если сессия истекла или Cloudflare показывает проверку, скрипт возвращает код 3, и пройти её нужно вручную в окне `login`.
+- **Лимиты.** Вызовы расходуют лимиты генерации картинок в вашем плане ChatGPT — те же, что и в приложении.
+- **Условия использования.** Автоматизация веб-интерфейса ChatGPT регулируется условиями OpenAI и находится в более серой зоне, чем штатный `codex exec`.
+
+## Режим codex
+
+Картинки создаёт встроенный инструмент `image_generation` из [Codex CLI](https://github.com/openai/codex), авторизованного через подписку ChatGPT. Работу с codex выполняет bash-скрипт `codex-image`.
+
+### Как это работает
+
+```
+агент ──▶ image-bridge.mjs ──bash──▶ codex-image ──codex exec──▶ image_generation (Codex, ChatGPT)
+                                          │                                │
+ Read PNG ◀────────────── копия в нужный ◀── generated_images/ ◀───────────┘
+                          путь              <session id>/
 ```
 
 1. Скрипт запускает `codex exec` во временной папке в облегчённом режиме — без плагинов, MCP-серверов, скиллов и прочей обвязки, которая не нужна для картинки.
@@ -22,11 +251,14 @@
 
 Codex не работает с итоговым путём, поэтому песочница его не блокирует, а путаница путей Windows/POSIX исключена.
 
-## Требования
+`--chat` в этом режиме не работает — вызов завершится кодом 2. Чтобы поправить картинку, вызовите генерацию заново с прошлым результатом в `--image`. `--image` прикладывается к запросу и передаётся инструменту как `referenced_image_paths`.
+
+### Требования
 
 - [Codex CLI](https://github.com/openai/codex): `npm install -g @openai/codex` (на macOS также `brew install codex`).
 - Вход в codex через подписку ChatGPT: `codex login`.
-- bash: на macOS и Linux есть из коробки, на Windows — Git Bash (им же пользуется Claude Code) или WSL.
+- bash: на macOS и Linux есть из коробки, на Windows — Git Bash (им же пользуется Claude Code) или WSL. На Windows точка входа ищет bash из Git for Windows: в `CLAUDE_CODE_GIT_BASH_PATH`, в PATH и рядом с `git.exe`; `bash.exe` из System32 — это запускатель WSL, он пропускается.
+- Node.js — им запускается точка входа `image-bridge.mjs`.
 
 Проверка:
 
@@ -35,75 +267,7 @@ codex login status                           # Logged in using ChatGPT
 codex features list | grep image_generation  # image_generation  stable  true
 ```
 
-## Установка
-
-### Claude Code через маркетплейс
-
-В сессии Claude Code:
-
-```
-/plugin marketplace add LorexIQ/codex-image-bridge
-/plugin install codex-image-bridge@codex-image-bridge
-```
-
-Или из терминала:
-
-```bash
-claude plugin marketplace add LorexIQ/codex-image-bridge
-claude plugin install codex-image-bridge@codex-image-bridge
-```
-
-После перезапуска сессии Claude сам будет использовать скилл, когда вы попросите картинку. Вызвать его явно — `/codex-image-bridge:generate-image`.
-
-### Claude Code без маркетплейса
-
-Скопируйте папку скилла в личные скиллы:
-
-```bash
-git clone https://github.com/LorexIQ/codex-image-bridge.git
-cp -R codex-image-bridge/plugins/codex-image-bridge/skills/generate-image ~/.claude/skills/
-```
-
-Путь к скрипту в SKILL.md задан через `${CLAUDE_SKILL_DIR}`, поэтому скилл работает из любого места установки. Не ставьте его одновременно двумя способами.
-
-### Другие агенты
-
-Скрипт `plugins/codex-image-bridge/skills/generate-image/bin/codex-image` не зависит ни от чего, кроме bash и codex. Сообщите агенту о нём в его файле инструкций (`AGENTS.md`, `GEMINI.md`, `.cursorrules` и т. п.):
-
-```
-Чтобы сгенерировать картинку, выполни: bash <путь>/codex-image "<подробный промпт>" <абсолютный-путь.png> [--size WxH] [--image <файл>]
-Генерация занимает несколько минут — ставь большой таймаут. После вызова открой PNG и проверь результат.
-```
-
-Полная версия инструкций — в [SKILL.md](./plugins/codex-image-bridge/skills/generate-image/SKILL.md).
-
-## Использование
-
-Скрипт можно вызвать и напрямую:
-
-```bash
-bash plugins/codex-image-bridge/skills/generate-image/bin/codex-image \
-  "фотореалистичная колибри перед красным каньоном в золотой час, малая глубина резкости, журнальное качество" \
-  /tmp/hummingbird.png
-```
-
-Параметры:
-
-- `--size WxH` — желаемый размер, например `--size 1536x1024`. Без него размер выбирает модель.
-- `--image <файл>` — исходная картинка для редактирования или референс. Можно указать несколько раз. Картинка прикладывается к запросу и передаётся инструменту как `referenced_image_paths`.
-
-Коды выхода:
-
-| Код | Что значит | Вывод |
-| --- | --- | --- |
-| 0 | Картинка готова | stdout: абсолютный путь (на Windows в виде `C:/...`) |
-| 1 | Codex завершился с ошибкой или инструмент не сохранил картинку | stderr: последние 30 строк лога и путь к полному логу |
-| 2 | Ошибка аргументов | stderr: сообщение об ошибке |
-| 127 | codex не найден в PATH | stderr: как установить |
-
-Временные файлы удаляются при любом завершении, в том числе по Ctrl+C и таймауту: скрипт останавливает codex вместе с дочерними процессами. После ошибки остаётся только лог, на который указывает сообщение.
-
-## Облегчённый запуск codex
+### Облегчённый запуск codex
 
 Для генерации картинки агентная обвязка codex не нужна, а каждая её часть стоит времени на старте или токенов на каждом вызове. Скрипт выключает:
 
@@ -113,7 +277,9 @@ bash plugins/codex-image-bridge/skills/generate-image/bin/codex-image \
 
 Остаются включёнными `image_generation`, `code_mode_host` (инструмент картинок доступен только через code mode), сжатие запросов и хранилище авторизации. Настройки песочницы берутся из вашего конфига codex.
 
-### Модель и reasoning effort
+`--disable` получает только фичи, которые есть в `codex features list` установленной версии: неизвестное имя codex считает ошибкой.
+
+#### Модель и reasoning effort
 
 Картинку рисует инструмент `image_gen`, а модель codex только передаёт ему промпт. Дорогая модель и долгое рассуждение здесь лишь тратят лимиты, поэтому скрипт фиксирует их независимо от конфига codex:
 
@@ -122,9 +288,7 @@ bash plugins/codex-image-bridge/skills/generate-image/bin/codex-image \
 | `CODEX_IMAGE_MODEL` | `gpt-5.6-sol` | модель codex (`-m`) |
 | `CODEX_IMAGE_EFFORT` | `low` | `model_reasoning_effort` |
 
-Например, `CODEX_IMAGE_EFFORT=medium bash codex-image "…" out.png`. Некорректные значения отклоняются с кодом 2 до вызова codex.
-
-`--disable` получает только фичи, которые есть в `codex features list` установленной версии: неизвестное имя codex считает ошибкой.
+Например, `CODEX_IMAGE_EFFORT=medium node image-bridge.mjs "…" out.png --via codex`. Некорректные значения отклоняются с кодом 2 до вызова codex.
 
 Замер на codex-cli 0.154 (запрос перехватывался локальным сервером, до OpenAI не доходил):
 
@@ -134,7 +298,7 @@ bash plugins/codex-image-bridge/skills/generate-image/bin/codex-image \
 | Время до первого запроса | 2,1–3,9 с | 1,0–1,9 с |
 | Процессы MCP и плагинов | запускаются | нет |
 
-## Ограничения
+### Ограничения
 
 - **Время.** Генерация обычно занимает несколько минут; при вызове из агента ставьте таймаут побольше или запускайте в фоне.
 - **Лимиты.** Вызовы расходуют лимиты Codex в вашем плане ChatGPT — те же, что и обычная работа в Codex.
@@ -145,13 +309,19 @@ bash plugins/codex-image-bridge/skills/generate-image/bin/codex-image \
 
 ```bash
 bash tests/codex-image.test.sh
+node --test tests/chatgpt-image.test.mjs
+node --test tests/image-bridge.test.mjs
 ```
 
-Тесты подменяют codex заглушкой: лимиты не тратятся, вход не нужен.
+Ни один тест не обращается к настоящим codex и chatgpt.com: лимиты не тратятся, вход не нужен.
+
+- `codex-image.test.sh` подменяет codex заглушкой в PATH.
+- `chatgpt-image.test.mjs` запускает настоящий Chrome без окна на локальном макете chatgpt.com (`tests/fixtures/fake-chatgpt.html`). Прогон занимает около минуты.
+- `image-bridge.test.mjs` проверяет выбор и переключение режима на временной `CHATGPT_IMAGE_HOME`, передачу вызова в `codex-image` с заглушкой codex (настоящий codex убирается из PATH) и в `chatgpt-image.mjs` на том же макете. Проверка пересылки SIGTERM на Windows пропускается: там Ctrl+C скрипт получает сам.
 
 ## Отличия от оригинала
 
-По сравнению с [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge):
+Режим codex вырос из [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge). По сравнению с оригиналом:
 
 - упаковано в маркетплейс Claude Code, путь к скрипту — через `${CLAUDE_SKILL_DIR}`;
 - картинка берётся только из `generated_images` — PNG, нарисованный моделью в обход инструмента, не принимается;
@@ -160,7 +330,8 @@ bash tests/codex-image.test.sh
 - фиксированные дешёвая модель `gpt-5.6-sol` и effort `low` с переопределением через окружение;
 - уборка временных файлов и остановка дерева процессов codex при ошибке, Ctrl+C и таймауте;
 - проверка `--size`, пути в формате Windows на выходе;
-- тесты на заглушке codex;
+- второй режим — генерация через веб-интерфейс ChatGPT в браузере с доработкой в том же чате — и единая точка входа с выбором режима;
+- тесты на заглушке codex и макете chatgpt.com;
 - документация и сообщения на русском.
 
 ## Лицензия

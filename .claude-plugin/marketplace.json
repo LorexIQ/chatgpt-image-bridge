@@ -1,17 +1,17 @@
 {
-  "name": "codex-image-bridge",
+  "name": "chatgpt-image-bridge",
   "owner": {
     "name": "LorexIQ",
     "url": "https://github.com/LorexIQ"
   },
   "metadata": {
-    "description": "Генерация изображений в Claude Code через Codex CLI и подписку ChatGPT"
+    "description": "Генерация изображений в Claude Code на подписке ChatGPT: через веб-интерфейс ChatGPT в браузере или через Codex CLI"
   },
   "plugins": [
     {
-      "name": "codex-image-bridge",
-      "source": "./plugins/codex-image-bridge",
-      "description": "Скилл generate-image: генерирует и редактирует изображения встроенным инструментом Codex CLI, без API-ключа OpenAI",
+      "name": "chatgpt-image-bridge",
+      "source": "./plugins/chatgpt-image-bridge",
+      "description": "Скилл generate-image: генерирует и редактирует изображения без API-ключа OpenAI — в веб-интерфейсе ChatGPT через браузер или встроенным инструментом Codex CLI; режим переключается командой /chatgpt-image-bridge:image-mode",
       "category": "productivity"
     }
   ]

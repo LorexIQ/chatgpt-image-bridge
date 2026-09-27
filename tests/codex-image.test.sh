@@ -7,7 +7,7 @@
 set -uo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-wrapper="$repo/plugins/codex-image-bridge/skills/generate-image/bin/codex-image"
+wrapper="$repo/plugins/chatgpt-image-bridge/skills/generate-image/bin/codex-image"
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/codex-image-test.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
