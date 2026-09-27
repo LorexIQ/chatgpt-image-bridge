@@ -157,7 +157,7 @@ reset; STUB_MODE=generated run "cat" "$T/out/a.png"
 
 # --- исходные и референсные картинки -----------------------------------------------
 echo "--image"
-reset; printf 'REF' >"$T/out/ref one.png"
+reset; printf '\x89PNG\r\n\x1a\n' >"$T/out/ref one.png"
 STUB_MODE=generated run "edit it" "$T/out/a.png" --image "$T/out/ref one.png"
 codex_args
 n=${#args[@]}

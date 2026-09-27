@@ -3,6 +3,7 @@
 // Селекторы опираются на id, data-testid и data-атрибуты, а не на aria-label:
 // подписи локализованы и в русском интерфейсе другие.
 
+import fs from 'node:fs';
 import { evaluate, openPage } from './cdp.mjs';
 
 export const CHAT_URL = 'https://chatgpt.com/';
@@ -146,11 +147,20 @@ const ASSISTANT_TURN = 'section[data-turn="assistant"], [data-testid^="conversat
 // Готовая картинка: файл из estuary, уже загруженный. Во время генерации их
 // в ответе нет — только текст прогресса. Один файл показан несколькими слоями
 // (основной, плавное появление, размытый фон), поэтому src уникализируем.
+// Картинка берётся только с origin самой страницы: скачивается она с куками
+// сессии, и картинку с чужого сайта, вставленную в ответ, трогать нельзя.
 const RESULT_STATE = `(() => {
+  const sameOrigin = (src) => {
+    try {
+      return new URL(src).origin === location.origin;
+    } catch {
+      return false;
+    }
+  };
   const turns = document.querySelectorAll(${JSON.stringify(ASSISTANT_TURN)});
   const last = turns[turns.length - 1];
   const images = last ? [...new Set([...last.querySelectorAll('img')]
-    .filter((img) => /\\/backend-api\\/estuary\\/content\\?/.test(img.src) && img.complete && img.naturalWidth > 0)
+    .filter((img) => /\\/backend-api\\/estuary\\/content\\?/.test(img.src) && sameOrigin(img.src) && img.complete && img.naturalWidth > 0)
     .map((img) => img.src))] : [];
   return {
     turns: turns.length,
@@ -166,9 +176,11 @@ const TEXT_SETTLE_MS = 8_000;
 const POLL_MS = 1_000;
 
 // followUp — страница открыта на существующем разговоре, и промпт уходит в
-// него продолжением. Возвращает { data, extension, chatUrl }, где chatUrl —
-// адрес разговора с картинкой ('' — если адрес не похож на разговор).
-export async function generateImage(page, { prompt, size, images, timeoutMs, followUp = false }) {
+// него продолжением. origins — откуда можно скачивать картинку: по умолчанию
+// только chatgpt.com (тесты добавляют адрес макета). Возвращает
+// { data, extension, chatUrl }, где chatUrl — адрес разговора с картинкой
+// ('' — если адрес не похож на разговор).
+export async function generateImage(page, { prompt, size, images, timeoutMs, followUp = false, origins = [new URL(CHAT_URL).origin] }) {
   const deadline = Date.now() + timeoutMs;
   const before = followUp ? await waitForHistory(page, deadline) : (await evaluate(page, RESULT_STATE)).turns;
 
@@ -185,7 +197,7 @@ export async function generateImage(page, { prompt, size, images, timeoutMs, fol
     const state = await evaluate(page, RESULT_STATE).catch(() => null);
     if (!state || state.turns <= before) continue;
     if (state.images.length && !state.stop) {
-      const image = await downloadImage(page, state.images[0]);
+      const image = await downloadImage(page, state.images[0], origins);
       // Без адреса разговора картинка всё равно готова — это не ошибка.
       const href = await evaluate(page, 'location.href').catch(() => '');
       return { ...image, chatUrl: conversationUrl(href) };
@@ -274,7 +286,13 @@ async function attachImages(page, files, deadline) {
 }
 
 // Скачиваем изнутри страницы: запрос к тому же домену, куки подставятся сами.
-async function downloadImage(page, src) {
+// Поэтому origin картинки проверяется ещё раз и здесь: RESULT_STATE сверяет
+// его с origin страницы, а страница могла и сама уйти с chatgpt.com.
+async function downloadImage(page, src, origins) {
+  const origin = URL.canParse(src) ? new URL(src).origin : '';
+  if (!origins.includes(origin)) {
+    throw new ChatGptError(`картинка лежит не на chatgpt.com (${origin || src}), скачивать её не стал.`);
+  }
   const payload = await evaluate(page, `(async () => {
     const response = await fetch(${JSON.stringify(src)}, { credentials: 'include' });
     if (!response.ok) return { error: 'HTTP ' + response.status };
@@ -286,17 +304,74 @@ async function downloadImage(page, src) {
   if (payload.error) throw new ChatGptError(`не удалось скачать картинку: ${payload.error}`);
   const data = Buffer.from(payload.data, 'base64');
   const extension = imageExtension(data);
-  if (!extension) throw new ChatGptError('скачанный файл не похож на картинку (не PNG, JPEG или WebP).');
+  if (!extension) throw new ChatGptError('скачанный файл не похож на картинку (не PNG, JPEG, WebP или GIF).');
   return { data, extension };
 }
 
+// Формат картинки по первым байтам или '', если это не PNG, JPEG, WebP или GIF.
 export function imageExtension(data) {
   if (data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
   if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'jpg';
   if (data.subarray(0, 4).toString('latin1') === 'RIFF' && data.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  if (['GIF87a', 'GIF89a'].includes(data.subarray(0, 6).toString('latin1'))) return 'gif';
   return '';
 }
 
-export function pageHtml(page) {
-  return evaluate(page, 'document.documentElement.outerHTML');
+// То же для файла: читает только первые 16 байт, файл может быть большим.
+// Так --image не пропускает в ChatGPT или codex ничего, кроме картинок, —
+// например, ключ SSH, подсунутый агенту под видом референса.
+export function imageFileExtension(file) {
+  const head = Buffer.alloc(16);
+  const fd = fs.openSync(file, 'r');
+  try {
+    return imageExtension(head.subarray(0, fs.readSync(fd, head, 0, head.length, 0)));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Состояние страницы для диагностики ошибки — только то, что помогает понять,
+// что пошло не так: адрес без query и hash, заголовок, признаки из PAGE_STATE,
+// идёт ли генерация, число ответов и начало текста последнего. HTML целиком
+// сохранять нельзя: в нём токен доступа и email пользователя. Куки, хранилища,
+// скрипты и боковая панель с названиями чатов сюда тоже не попадают.
+const DIAGNOSTIC_TEXT_LIMIT = 2000;
+const DIAGNOSTIC_STATE = `(() => {
+  const { title, composer, loginButton, authPage, challenge } = ${PAGE_STATE};
+  const { turns, stop, text } = ${RESULT_STATE};
+  return {
+    url: location.href.split(/[?#]/)[0],
+    title,
+    composer,
+    loginButton,
+    authPage,
+    challenge,
+    stopButton: stop,
+    assistantTurns: turns,
+    lastAssistantText: text.length > ${DIAGNOSTIC_TEXT_LIMIT} ? text.slice(0, ${DIAGNOSTIC_TEXT_LIMIT}) + '…' : text,
+  };
+})()`;
+
+export function diagnosticState(page) {
+  return evaluate(page, DIAGNOSTIC_STATE);
+}
+
+// Область чата для скриншота диагностики: main, без боковой панели с
+// историей чатов. Координаты — страницы, в пределах окна, как ждёт clip в
+// Page.captureScreenshot. null — если области нет или она пустая: тогда
+// скриншота не будет, снимать всё окно нельзя.
+const CHAT_AREA = `(() => {
+  const main = document.querySelector('main');
+  if (!main) return null;
+  const rect = main.getBoundingClientRect();
+  const left = Math.max(rect.left, 0);
+  const top = Math.max(rect.top, 0);
+  const width = Math.min(rect.right, window.innerWidth) - left;
+  const height = Math.min(rect.bottom, window.innerHeight) - top;
+  if (width < 1 || height < 1) return null;
+  return { x: left + window.scrollX, y: top + window.scrollY, width, height, scale: 1 };
+})()`;
+
+export function chatAreaClip(page) {
+  return evaluate(page, CHAT_AREA);
 }

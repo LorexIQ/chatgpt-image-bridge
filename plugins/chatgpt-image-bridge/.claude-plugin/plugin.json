@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-image-bridge",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Генерация и редактирование изображений на подписке ChatGPT без API-ключа OpenAI — через веб-интерфейс ChatGPT в браузере, с доработкой картинки в том же чате, или через встроенный инструмент Codex CLI. Режим переключается командой /chatgpt-image-bridge:image-mode",
   "author": {
     "name": "LorexIQ",

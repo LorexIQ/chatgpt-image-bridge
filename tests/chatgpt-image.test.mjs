@@ -27,6 +27,9 @@ const OLD_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADEl
 let server;
 let baseUrl;
 let recorded = [];
+// Запросы картинок estuary: кто просил (host), и как — тегом img (dest image)
+// или скачиванием через fetch (dest empty).
+let estuary = [];
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chatgpt-image-test-'));
 
 before(async () => {
@@ -36,7 +39,12 @@ before(async () => {
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => { recorded.push(JSON.parse(body)); res.end(); });
     } else if (req.url.startsWith('/backend-api/estuary/content')) {
-      res.writeHead(200, { 'content-type': 'image/png' }).end(req.url.includes('id=file_old') ? OLD_PNG : PNG);
+      estuary.push({ host: req.headers.host, dest: req.headers['sec-fetch-dest'] });
+      // Картинки отдаются и чужому origin вместе с куками — как сервер, который
+      // сам хочет, чтобы его картинку скачали. Иначе скачивание с другого
+      // origin запретил бы браузер, и тест на него ничего бы не проверял.
+      const cors = req.headers.origin ? { 'access-control-allow-origin': req.headers.origin, 'access-control-allow-credentials': 'true' } : {};
+      res.writeHead(200, { 'content-type': 'image/png', ...cors }).end(req.url.includes('id=file_old') ? OLD_PNG : PNG);
     } else {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(fixture);
     }
@@ -53,6 +61,7 @@ after(() => {
 let runs = 0;
 function run(args, { mode, env = {}, home = path.join(tmp, `home-${runs++}`) } = {}) {
   recorded = [];
+  estuary = [];
   const fullEnv = { ...process.env, CHATGPT_IMAGE_HOME: home, CHATGPT_IMAGE_HEADLESS: '1', ...env };
   if (mode) fullEnv.CHATGPT_IMAGE_URL = `${baseUrl}?mode=${mode}`;
   return new Promise((resolve) => {
@@ -67,13 +76,19 @@ const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toL
 // Разговор, в который макет переходит после отправки в новом чате.
 const conversation = () => `${new URL(baseUrl).origin}/c/fake-conversation`;
 
-// Диагностику ошибки (скриншот и HTML) тест проверяет и удаляет.
+// Диагностику ошибки (скриншот области чата и state.json) тест читает и
+// удаляет: файлы, текст state.json и ширину скриншота из заголовка PNG.
 function takeDiagnostics(stderr) {
-  const dir = /скриншот и HTML страницы: (.+)\)/.exec(stderr)?.[1];
+  const dir = /скриншот области чата и состояние страницы: (.+)\)/.exec(stderr)?.[1];
   assert.ok(dir, stderr);
-  const files = ['screenshot.png', 'page.html'].filter((name) => fs.existsSync(path.join(dir, name)));
-  fs.rmSync(dir, { recursive: true, force: true });
-  return files;
+  try {
+    const files = fs.readdirSync(dir).sort();
+    const stateText = files.includes('state.json') ? fs.readFileSync(path.join(dir, 'state.json'), 'utf8') : '';
+    const screenshot = files.includes('screenshot.png') ? fs.readFileSync(path.join(dir, 'screenshot.png')) : null;
+    return { files, stateText, screenshotWidth: screenshot ? screenshot.readUInt32BE(16) : 0 };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // После выхода браузер должен быть остановлен, а замок профиля снят.
@@ -114,6 +129,47 @@ test('ошибки аргументов — код 2', async () => {
     assert.equal(r.code, 2, `${args.join(' ')}: ${r.stderr}`);
     assert.match(r.stderr, message);
   }
+});
+
+test('--image принимает только картинки: другой файл — код 2, браузер не запускается', async () => {
+  const reference = out('good-reference.png');
+  fs.writeFileSync(reference, PNG);
+  const files = {
+    'id_ed25519.png': '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU=\n-----END OPENSSH PRIVATE KEY-----\n',
+    'notes.txt': 'пароль от почты',
+    'empty.png': '',
+    'short.png': PNG.subarray(0, 4),
+  };
+  for (const [name, content] of Object.entries(files)) {
+    const file = out(name);
+    fs.writeFileSync(file, content);
+    // Настоящая картинка первой: проверяется каждый --image, а не только первый.
+    const r = await run(['кот', out('a.png'), '--image', reference, '--image', file], { mode: 'ok' });
+    assert.equal(r.code, 2, `${name}: ${r.stderr}`);
+    assert.match(r.stderr, /^chatgpt-image: --image принимает только картинки PNG, JPEG, WebP или GIF: /);
+    assert.ok(r.stderr.includes(name), r.stderr);
+    assert.equal(recorded.length, 0, 'промпт ушёл в ChatGPT');
+    assert.equal(fs.existsSync(r.home), false, 'вызов дошёл до запуска браузера');
+  }
+});
+
+test('формат картинки определяется по первым байтам', () => {
+  const GIF = Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64');
+  assert.equal(chatgpt.imageExtension(PNG), 'png');
+  assert.equal(chatgpt.imageExtension(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46])), 'jpg');
+  assert.equal(chatgpt.imageExtension(Buffer.from('RIFF\x24\0\0\0WEBPVP8 ', 'latin1')), 'webp');
+  assert.equal(chatgpt.imageExtension(GIF), 'gif');
+  assert.equal(chatgpt.imageExtension(Buffer.from('GIF87a\x01\0\x01\0', 'latin1')), 'gif');
+  assert.equal(chatgpt.imageExtension(Buffer.from('GIF88a\x01\0\x01\0', 'latin1')), '');
+  assert.equal(chatgpt.imageExtension(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')), '');
+  assert.equal(chatgpt.imageExtension(Buffer.alloc(0)), '');
+
+  const gifFile = out('reference.gif');
+  fs.writeFileSync(gifFile, GIF);
+  assert.equal(chatgpt.imageFileExtension(gifFile), 'gif');
+  const textFile = out('reference.txt');
+  fs.writeFileSync(textFile, 'не картинка');
+  assert.equal(chatgpt.imageFileExtension(textFile), '');
 });
 
 test('некорректный CHATGPT_IMAGE_TIMEOUT — код 2', async () => {
@@ -209,12 +265,64 @@ test('--chat продолжает разговор: новая картинка,
   await assertCleanedUp(r.home);
 });
 
-test('ответ без картинки — код 1, текст ответа и диагностика', async () => {
+test('ответ без картинки — код 1, текст ответа и диагностика без данных сессии', async () => {
   const r = await run(['кот', out('refusal.png')], { mode: 'refusal' });
   assert.equal(r.code, 1);
   assert.equal(r.stdout, '');
   assert.match(r.stderr, /ответил без картинки: Я не могу создать такое изображение/);
-  assert.deepEqual(takeDiagnostics(r.stderr), ['screenshot.png', 'page.html']);
+  const diagnostics = takeDiagnostics(r.stderr);
+  assert.deepEqual(diagnostics.files, ['screenshot.png', 'state.json']);
+  assert.ok(!diagnostics.files.some((name) => name.endsWith('.html')), 'HTML страницы сохранён');
+
+  // Только состояние страницы — без HTML, скриптов, токена, email и боковой
+  // панели. Адрес — без query.
+  const state = JSON.parse(diagnostics.stateText);
+  assert.deepEqual(state, {
+    url: conversation(),
+    title: 'ChatGPT',
+    composer: true,
+    loginButton: false,
+    authPage: false,
+    challenge: false,
+    stopButton: false,
+    assistantTurns: 1,
+    lastAssistantText: 'Я не могу создать такое изображение.',
+  });
+  assert.doesNotMatch(diagnostics.stateText, /<script/i);
+  assert.doesNotMatch(diagnostics.stateText, /eyJ/);
+  assert.doesNotMatch(diagnostics.stateText, /user@example\.com|Секретный чат/);
+
+  // Скриншот — только область чата: без боковой панели шириной 260 px.
+  assert.ok(diagnostics.screenshotWidth > 0 && diagnostics.screenshotWidth <= 1280 - 260, `ширина скриншота ${diagnostics.screenshotWidth}`);
+  await assertCleanedUp(r.home);
+});
+
+test('картинку с другого origin не скачивает — ждёт до таймаута, код 1', async () => {
+  const target = out('foreign.png');
+  const r = await run(['кот', target], { mode: 'foreign', env: { CHATGPT_IMAGE_TIMEOUT: '6' } });
+  assert.equal(r.code, 1, `${r.stdout}${r.stderr}`);
+  const diagnostics = takeDiagnostics(r.stderr);
+  assert.match(r.stderr, /не появилась за 6 секунд/);
+  assert.equal(fs.existsSync(target), false);
+  // Картинка на странице загрузилась с localhost — то есть отсеял её именно
+  // origin, а не ошибка загрузки. Но скачать её скрипт не пытался.
+  const port = new URL(baseUrl).port;
+  assert.ok(estuary.some((request) => request.host === `localhost:${port}` && request.dest === 'image'), JSON.stringify(estuary));
+  assert.deepEqual(estuary.filter((request) => request.dest !== 'image'), [], 'картинку скачивали');
+  assert.equal(JSON.parse(diagnostics.stateText).url, conversation());
+  await assertCleanedUp(r.home);
+});
+
+test('страница ушла с chatgpt.com — картинку с её origin не скачивает, код 1', async () => {
+  const target = out('moved.png');
+  const r = await run(['кот', target], { mode: 'moved' });
+  assert.equal(r.code, 1, `${r.stdout}${r.stderr}`);
+  const diagnostics = takeDiagnostics(r.stderr);
+  assert.match(r.stderr, /картинка лежит не на chatgpt\.com \(http:\/\/localhost:\d+\), скачивать её не стал/);
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(recorded.length, 1, 'промпт не дошёл до страницы на localhost');
+  assert.deepEqual(estuary.filter((request) => request.dest !== 'image'), [], 'картинку скачивали');
+  assert.match(JSON.parse(diagnostics.stateText).url, /^http:\/\/localhost:\d+\/c\/fake-conversation$/);
   await assertCleanedUp(r.home);
 });
 

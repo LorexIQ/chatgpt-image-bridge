@@ -110,6 +110,8 @@ const readConfig = (home) => JSON.parse(fs.readFileSync(path.join(home, 'config.
 const out = (name) => path.join(tmp, name);
 // codex-image вызывают из bash, пути ему привычнее с прямыми слешами.
 const slashes = (p) => p.replaceAll('\\', '/');
+// Путь в виде Git Bash (/c/Users/...), как его передаёт агент на Windows.
+const gitBashPath = (p) => (process.platform === 'win32' ? slashes(p).replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`) : p);
 const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 const conversation = () => `${new URL(baseUrl).origin}/c/fake-conversation`;
 
@@ -286,6 +288,44 @@ test('codex: --chat — код 2, codex не вызывается', async () => 
     assert.match(r.stderr, /--chat работает только в режиме web/);
   }
   assert.equal(stubArgs(stub.args), null, 'codex вызывался');
+});
+
+test('--image принимает только картинки: другой файл — код 2 до передачи в любой режим', async () => {
+  const key = out('id_ed25519');
+  fs.writeFileSync(key, '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU=\n-----END OPENSSH PRIVATE KEY-----\n');
+  const reference = out('bridge-reference.png');
+  fs.writeFileSync(reference, PNG);
+  const home = newHome();
+  writeConfig(home, { mode: 'codex' });
+  const stub = codexEnv();
+  const onlyImages = /^image-bridge: --image принимает только картинки PNG, JPEG, WebP или GIF: .*id_ed25519/;
+
+  // codex: настоящая картинка первой — проверяется каждый --image. Заглушка
+  // codex не вызывается.
+  let r = await run(['кот', slashes(out('a.png')), '--image', gitBashPath(reference), '--image', gitBashPath(key)], { home, env: stub.env });
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, onlyImages);
+  assert.equal(stubArgs(stub.args), null, 'codex вызывался');
+
+  // Несуществующий файл диспетчер тоже не передаёт.
+  r = await run(['кот', slashes(out('a.png')), '--image', slashes(out('нет.png'))], { home, env: stub.env });
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, /^image-bridge: картинка не найдена: .*нет\.png/);
+  assert.equal(stubArgs(stub.args), null, 'codex вызывался');
+
+  // web: сообщение от диспетчера, а не от chatgpt-image; до макета ничего не дошло.
+  r = await run(['кот', out('a.png'), '--image', key], { env: { CHATGPT_IMAGE_URL: `${baseUrl}?mode=ok`, CHATGPT_IMAGE_HEADLESS: '1' } });
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, onlyImages);
+  assert.equal(recorded.length, 0, 'промпт ушёл в макет ChatGPT');
+  assert.equal(fs.existsSync(r.home), false, 'chatgpt-image запускался');
+
+  // А картинка, в том числе GIF и путь в виде Git Bash, доходит до codex.
+  const gif = out('bridge-reference.gif');
+  fs.writeFileSync(gif, Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64'));
+  r = await run(['кот', slashes(out('bridge-gif.png')), '--image', gitBashPath(gif)], { home, env: stub.env });
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(samePath(stubArgs(stub.args).at(-1), gif), stubArgs(stub.args).at(-1));
 });
 
 test('codex: нет bash — код 127 с подсказкой', async () => {

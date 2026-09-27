@@ -2,7 +2,7 @@
 <!--
   Макет chatgpt.com для тестов chatgpt-image: та же разметка, по которой
   скрипт находит поле ввода, кнопки, ответ и картинку (снята с настоящей
-  страницы). Режим задаётся в адресе: ?mode=ok|refusal|login|hang.
+  страницы). Режим задаётся в адресе: ?mode=ok|refusal|login|hang|foreign|moved.
   Всё, что скрипт ввёл и приложил, страница отправляет на /record.
 
   Адрес /c/<id> — уже существующий разговор (как --chat): старые сообщения
@@ -12,12 +12,35 @@
   старую картинку за новую. В новом чате после отправки адрес, как на
   chatgpt.com, меняется на /c/<id>; query остаётся, чтобы проверить, что
   скрипт его отрезает.
+
+  Как и на настоящей странице, в HTML лежат токен доступа и email, а слева —
+  боковая панель с названиями чатов: диагностика ошибки не должна их унести.
+
+  foreign — картинка в ответе лежит по пути estuary, но на другом origin
+  (localhost вместо 127.0.0.1): скачивать её скрипт не должен.
+  moved — страница сразу уходит с 127.0.0.1 на localhost и дальше ведёт себя
+  как ok: картинка на том же origin, что и страница, но этот origin не
+  chatgpt.com и не адрес макета из CHATGPT_IMAGE_URL.
 -->
 <meta charset="utf-8">
 <title>ChatGPT</title>
+<style>
+  body { margin: 0 0 0 260px; font: 16px system-ui, sans-serif; }
+  #sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: 260px; background: #171717; color: #ececec; }
+</style>
+<script>
+  window.__reactRouterContext = { state: { loaderData: { root: { clientBootstrap: {
+    session: { accessToken: 'eyJhbGciOiJSUzI1NiJ9.eyJmYWtlIjp0cnVlfQ.ZmFrZS1zaWduYXR1cmU', user: { email: 'user@example.com' } },
+  } } } } };
+</script>
+<nav id="sidebar"><a href="/c/secret-chat">Секретный чат пользователя</a></nav>
 <main id="thread"></main>
 <script>
   const mode = new URLSearchParams(location.search).get('mode') || 'ok';
+  if (mode === 'moved' && location.hostname === '127.0.0.1') {
+    location.replace(location.href.replace('127.0.0.1', 'localhost'));
+    throw new Error('ухожу на localhost');
+  }
   const existing = /^\/c\/[^/]+$/.test(location.pathname);
   const thread = document.getElementById('thread');
   const record = (data) => fetch('/record', { method: 'POST', body: JSON.stringify(data) });
@@ -87,7 +110,8 @@
         } else {
           answer.textContent = '';
           // Один файл тремя слоями, как на настоящей странице.
-          answer.insertAdjacentHTML('beforeend', imageLayers('/backend-api/estuary/content?id=file_test&sig=1'));
+          const origin = mode === 'foreign' ? location.origin.replace('127.0.0.1', 'localhost') : '';
+          answer.insertAdjacentHTML('beforeend', imageLayers(`${origin}/backend-api/estuary/content?id=file_test&sig=1`));
         }
         document.getElementById('stop').remove();
       }, 1500);

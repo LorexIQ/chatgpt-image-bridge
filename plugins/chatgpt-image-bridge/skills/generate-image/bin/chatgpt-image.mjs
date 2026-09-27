@@ -5,6 +5,8 @@
 // Использование: chatgpt-image "<промпт>" <выход.png> [--size WxH] [--image <файл>]... [--chat <адрес>]
 //                chatgpt-image login
 //
+// --image <файл> — референс; принимаются только картинки PNG, JPEG, WebP или
+// GIF (по содержимому файла, а не по расширению).
 // --chat <адрес> — продолжить разговор ChatGPT, в котором уже есть картинка:
 // промпт уходит туда как просьба о правках, приложенные раньше референсы
 // ChatGPT уже видит.
@@ -102,18 +104,36 @@ function parseArgs(argv) {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new CliError(2, `chatgpt-image: картинка не найдена: ${image}`);
     }
+    // Проверка по содержимому, а не по расширению: всё, что приложено,
+    // уходит в ChatGPT.
+    let extension;
+    try {
+      extension = chatgpt.imageFileExtension(resolved);
+    } catch (error) {
+      throw new CliError(2, `chatgpt-image: не удалось прочитать картинку ${image}: ${error.message}`);
+    }
+    if (!extension) {
+      throw new CliError(2, `chatgpt-image: --image принимает только картинки PNG, JPEG, WebP или GIF: ${image}`);
+    }
     return resolved;
   });
 
   return { command: 'generate', prompt, outPath, size, images: imagePaths, chat };
 }
 
-// --chat принимает только адрес разговора на chatgpt.com. В тестах
-// (CHATGPT_IMAGE_URL) — ещё и разговор на том же сервере, что и макет.
-function parseChatUrl(value) {
+// Где может быть разговор из --chat и откуда можно скачивать картинку: только
+// chatgpt.com, а в тестах (CHATGPT_IMAGE_URL) — ещё и сервер макета.
+function allowedOrigins() {
   const origins = [new URL(chatgpt.CHAT_URL).origin];
   const testUrl = process.env.CHATGPT_IMAGE_URL;
   if (testUrl && URL.canParse(testUrl)) origins.push(new URL(testUrl).origin);
+  return origins;
+}
+
+// --chat принимает только адрес разговора на chatgpt.com. В тестах
+// (CHATGPT_IMAGE_URL) — ещё и разговор на том же сервере, что и макет.
+function parseChatUrl(value) {
+  const origins = allowedOrigins();
   const url = URL.canParse(value) ? new URL(value) : null;
   const chat = url && !url.search && !url.hash && origins.includes(url.origin) ? chatgpt.conversationUrl(value) : '';
   if (!chat) {
@@ -247,7 +267,7 @@ async function generate({ prompt, outPath, size, images, chat }) {
   let page;
   try {
     ({ page } = await chatgpt.openChat(connection, url));
-    const image = await chatgpt.generateImage(page, { prompt, size, images, timeoutMs, followUp: !!chat });
+    const image = await chatgpt.generateImage(page, { prompt, size, images, timeoutMs, followUp: !!chat, origins: allowedOrigins() });
     const finalPath = withExtension(outPath, image.extension);
     fs.writeFileSync(finalPath, image.data);
     await closeBrowser(connection, browser);
@@ -276,19 +296,42 @@ async function closeBrowser(connection, browser) {
   }
 }
 
-// Скриншот и HTML страницы на момент ошибки — чтобы было видно, что пошло не
-// так, без повторного запуска и лишней траты лимитов.
+// Состояние страницы и скриншот области чата на момент ошибки — чтобы было
+// видно, что пошло не так, без повторного запуска и лишней траты лимитов.
+// Агент может открыть эти файлы, поэтому в них нет ничего из сессии: ни HTML
+// страницы (там токен доступа и email), ни боковой панели с названиями чатов.
+// Если область чата не нашлась, скриншота нет совсем — всё окно не снимается.
 async function saveDiagnostics(page) {
+  let dir;
   try {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatgpt-image-'));
-    const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
-    fs.writeFileSync(path.join(dir, 'screenshot.png'), Buffer.from(data, 'base64'));
-    const html = await chatgpt.pageHtml(page);
-    fs.writeFileSync(path.join(dir, 'page.html'), html);
-    return `\n(скриншот и HTML страницы: ${displayPath(dir)})`;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatgpt-image-'));
   } catch {
     return '';
   }
+  let screenshot = false;
+  let state = false;
+  try {
+    const clip = await chatgpt.chatAreaClip(page);
+    if (clip) {
+      const { data } = await page.send('Page.captureScreenshot', { format: 'png', clip });
+      fs.writeFileSync(path.join(dir, 'screenshot.png'), Buffer.from(data, 'base64'));
+      screenshot = true;
+    }
+  } catch {
+    // Диагностика не должна подменять собой исходную ошибку.
+  }
+  try {
+    fs.writeFileSync(path.join(dir, 'state.json'), `${JSON.stringify(await chatgpt.diagnosticState(page), null, 2)}\n`);
+    state = true;
+  } catch {
+    // Без состояния страницы остаётся хотя бы скриншот.
+  }
+  const saved = [screenshot && 'скриншот области чата', state && 'состояние страницы'].filter(Boolean).join(' и ');
+  if (!saved) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return '';
+  }
+  return `\n(${saved}: ${displayPath(dir)})`;
 }
 
 async function main() {

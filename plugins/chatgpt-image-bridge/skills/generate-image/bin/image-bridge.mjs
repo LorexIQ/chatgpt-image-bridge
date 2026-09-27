@@ -14,13 +14,15 @@
 // Все аргументы, кроме --via, уходят выбранному скрипту без изменений, его
 // вывод и код выхода возвращаются как есть. Сам диспетчер выходит с кодом 2
 // при ошибке аргументов или режима и с кодом 127, если для режима codex не
-// нашёлся bash.
+// нашёлся bash. Файлы из --image он до передачи проверяет сам: в любом режиме
+// принимаются только картинки PNG, JPEG, WebP или GIF.
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { imageFileExtension } from '../lib/chatgpt.mjs';
 
 const MODES = ['codex', 'web'];
 const DEFAULT_MODE = 'web';
@@ -50,6 +52,42 @@ class CliError extends Error {
 // Путь для сообщений: на Windows с прямыми слешами, как у скриптов режимов.
 function displayPath(p) {
   return process.platform === 'win32' ? p.replaceAll('\\', '/') : p;
+}
+
+// Пути из Git Bash (/c/Users/..., /tmp/...) переводятся через cygpath, как в
+// chatgpt-image: диспетчер должен прочитать тот же файл, что и скрипт режима.
+function nativePath(p) {
+  if (process.platform === 'win32' && p.startsWith('/')) {
+    try {
+      return execFileSync('cygpath', ['-w', p], { encoding: 'utf8' }).trim();
+    } catch {
+      const drive = /^\/([a-zA-Z])(\/.*)?$/.exec(p);
+      if (drive) return `${drive[1].toUpperCase()}:${drive[2] ?? '/'}`;
+    }
+  }
+  return p;
+}
+
+// --image уходит в ChatGPT или codex, поэтому до передачи проверяется по
+// содержимому: только картинки. Иначе агент, которому подсунули инструкцию
+// в промпте, мог бы отправить туда, например, ключ SSH. Файл, который не
+// удалось найти или прочитать, тоже не пропускается.
+function checkImages(images) {
+  for (const image of images) {
+    const file = path.resolve(nativePath(image));
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      throw new CliError(2, `image-bridge: картинка не найдена: ${image}`);
+    }
+    let extension;
+    try {
+      extension = imageFileExtension(file);
+    } catch (error) {
+      throw new CliError(2, `image-bridge: не удалось прочитать картинку ${image}: ${error.message}`);
+    }
+    if (!extension) {
+      throw new CliError(2, `image-bridge: --image принимает только картинки PNG, JPEG, WebP или GIF: ${image}`);
+    }
+  }
 }
 
 // Та же папка, что у chatgpt-image: профиль браузера, config.json, замок.
@@ -102,8 +140,10 @@ function resolveMode(via) {
 }
 
 // Вынимает --via из аргументов, остальное оставляет в исходном порядке.
+// Значения --image запоминает отдельно — для проверки перед передачей.
 function parseArgs(argv) {
   const rest = [];
+  const images = [];
   let via;
   let chat = false;
   for (let i = 0; i < argv.length; i++) {
@@ -117,10 +157,13 @@ function parseArgs(argv) {
     // Первые два аргумента — промпт и путь, опции идут после них.
     if (rest.length > 2 && VALUE_OPTIONS.includes(arg)) {
       if (arg === '--chat') chat = true;
-      if (i + 1 < argv.length) rest.push(argv[++i]);
+      if (i + 1 < argv.length) {
+        if (arg === '--image') images.push(argv[i + 1]);
+        rest.push(argv[++i]);
+      }
     }
   }
-  return { via, rest, chat };
+  return { via, rest, chat, images };
 }
 
 // Скрипт режима работает в том же терминале: stdio общие, код выхода — его.
@@ -234,15 +277,16 @@ async function loginCommand(args, via) {
   return forward(process.execPath, [webScript, 'login'], NO_NODE);
 }
 
-async function generateCommand(args, via, chat) {
+async function generateCommand(args, via, chat, images) {
   if (args.length < 2) throw new CliError(2, USAGE);
   const { mode, source } = resolveMode(via);
-  if (mode === 'web') return forward(process.execPath, [webScript, ...args], NO_NODE);
-
-  if (chat) {
+  if (mode === 'codex' && chat) {
     throw new CliError(2, `image-bridge: --chat работает только в режиме web, а сейчас режим codex (${source}). `
       + 'В режиме codex правку делают новым вызовом с прошлой картинкой в --image; продолжить разговор ChatGPT можно с --via web.');
   }
+  checkImages(images);
+  if (mode === 'web') return forward(process.execPath, [webScript, ...args], NO_NODE);
+
   const bash = findBash();
   if (!bash) throw new CliError(127, NO_BASH);
   return forward(bash, [displayPath(codexScript), ...args], NO_BASH);
@@ -250,10 +294,10 @@ async function generateCommand(args, via, chat) {
 
 async function main() {
   try {
-    const { via, rest, chat } = parseArgs(process.argv.slice(2));
+    const { via, rest, chat, images } = parseArgs(process.argv.slice(2));
     if (rest[0] === 'mode') return modeCommand(rest.slice(1), via);
     if (rest[0] === 'login') return await loginCommand(rest.slice(1), via);
-    return await generateCommand(rest, via, chat);
+    return await generateCommand(rest, via, chat, images);
   } catch (error) {
     if (error instanceof CliError) {
       process.stderr.write(`${error.message}\n`);
